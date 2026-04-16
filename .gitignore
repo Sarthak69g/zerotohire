@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.DS_Store
+
+# Generated application kits and runtime logs
+outputs/
+*.log
+
+# Local candidate profile data
+profiles/
