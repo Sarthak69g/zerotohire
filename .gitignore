@@ -9,6 +9,8 @@ env/
 # Generated application kits and runtime logs
 outputs/
 *.log
+app.db
+.data/
 
 # Local candidate profile data
 profiles/

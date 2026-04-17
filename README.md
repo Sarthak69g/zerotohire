@@ -83,6 +83,8 @@ The project is ready for single-service deployment (backend + frontend in one Fl
 - `GROQ_API_KEY`
 - `GROQ_MODEL` (optional, default already set in code)
 - `FRONTEND_ORIGIN` (use your deployed domain, or `*` if needed)
+- `SESSION_SECRET` (required for login sessions)
+- `SESSION_COOKIE_SECURE` (`true` in production over HTTPS)
 - `PORT` (set by platform automatically)
 
 ### Render / Railway style deploy

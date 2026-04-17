@@ -12,7 +12,7 @@
   --lime-dim: #a8d900;
   --black: #080808;
   --surface: #101010;
-  --surface2: #181818;
+  --surface2: #181818; 
   --surface3: #1f1f1f;
   --border: rgba(255,255,255,0.08);
   --text: #f0f0f0;
@@ -245,11 +245,37 @@ footer { border-top: 1px solid var(--border); padding: 32px 40px; display: flex;
 .toast { position: fixed; bottom: 32px; left: 40px; z-index: 9999; background: var(--lime); color: var(--black); font-family: 'Barlow Condensed', sans-serif; font-weight: 900; font-size: 15px; letter-spacing: 2px; text-transform: uppercase; padding: 14px 28px; transform: translateY(80px); opacity: 0; transition: all 0.4s cubic-bezier(0.34,1.56,0.64,1); clip-path: polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px)); }
 .toast.show { transform: translateY(0); opacity: 1; }
 .cursor-dot { position: fixed; pointer-events: none; z-index: 9998; width: 8px; height: 8px; background: var(--lime); transform: translate(-50%,-50%); transition: transform 0.1s; mix-blend-mode: difference; }
+.auth-overlay { position: fixed; inset: 0; z-index: 12000; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; padding: 20px; }
+.auth-overlay.show { display: flex; }
+.auth-card { width: min(460px, 96vw); background: var(--surface); border: 1px solid var(--border); padding: 24px; }
+.auth-card h3 { font-family: 'Bebas Neue', sans-serif; font-size: 34px; letter-spacing: 2px; margin-bottom: 8px; }
+.auth-msg { font-family: 'DM Mono', monospace; color: var(--text-muted); font-size: 11px; margin-bottom: 14px; }
+.auth-row { display: grid; gap: 8px; margin-bottom: 10px; }
+.auth-user { font-family: 'DM Mono', monospace; color: var(--text-muted); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.auth-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.auth-btn { border: 1px solid var(--border); background: var(--surface3); color: var(--text-sub); padding: 10px 12px; font-family: 'Barlow Condensed', sans-serif; font-size: 14px; letter-spacing: 1px; text-transform: uppercase; cursor: crosshair; }
+.auth-btn.primary { background: var(--lime); color: var(--black); border-color: var(--lime); font-weight: 800; }
 </style>
 </head>
 <body>
 
 <div class="cursor-dot" id="cursorDot"></div>
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-card">
+    <h3>Account Login</h3>
+    <p class="auth-msg">Create an account to save and protect your run history, profiles, tracker and analytics.</p>
+    <div class="auth-row">
+      <input type="text" id="authName" placeholder="Name (for register)" />
+      <input type="text" id="authEmail" placeholder="Email" />
+      <input type="password" id="authPassword" placeholder="Password (min 8 chars)" />
+    </div>
+    <div class="auth-btns">
+      <button class="auth-btn primary" onclick="loginUser()">Login</button>
+      <button class="auth-btn" onclick="registerUser()">Register</button>
+    </div>
+    <p class="auth-msg" id="authError"></p>
+  </div>
+</div>
 
 <div class="ticker" aria-hidden="true">
   <div class="ticker-inner">
@@ -278,6 +304,8 @@ footer { border-top: 1px solid var(--border); padding: 32px 40px; display: flex;
   <div class="nav-logo">Auto<span>Apply</span></div>
   <div class="nav-meta">
     <span>V2.0</span>
+    <span class="auth-user" id="authUser">Not logged in</span>
+    <button class="auth-btn" id="logoutBtn" onclick="logoutUser()" style="display:none;padding:6px 10px;font-size:12px;">Logout</button>
     <span class="status" id="navStatus">5 Agents Ready</span>
   </div>
 </nav>
@@ -558,6 +586,7 @@ let profiles = [];
 let latestRunId = '';
 let latestSavedFiles = {};
 let latestCompanyIntel = {};
+let currentUser = null;
 
 // Cursor
 const dot = document.getElementById('cursorDot');
@@ -590,9 +619,92 @@ function updateRunLabel() {
   document.querySelector('.run-text').textContent = `RUN ${count} AGENTS`;
 }
 
+function showAuth() {
+  document.getElementById('authOverlay').classList.add('show');
+}
+
+function hideAuth() {
+  document.getElementById('authOverlay').classList.remove('show');
+  document.getElementById('authError').textContent = '';
+}
+
+function setAuthUser(user) {
+  currentUser = user;
+  document.getElementById('authUser').textContent = user ? `${user.name} (${user.email})` : 'Not logged in';
+  document.getElementById('logoutBtn').style.display = user ? 'inline-block' : 'none';
+}
+
+async function checkAuth() {
+  try {
+    const data = await apiJson('/auth/me');
+    setAuthUser(data.user);
+    hideAuth();
+    return true;
+  } catch {
+    setAuthUser(null);
+    showAuth();
+    return false;
+  }
+}
+
+async function loginUser() {
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  try {
+    const data = await apiJson('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    setAuthUser(data.user);
+    hideAuth();
+    loadProfiles();
+    loadHistory();
+    loadAnalytics();
+  } catch (err) {
+    document.getElementById('authError').textContent = err.message;
+  }
+}
+
+async function registerUser() {
+  const name = document.getElementById('authName').value.trim() || 'Candidate';
+  const email = document.getElementById('authEmail').value.trim();
+  const password = document.getElementById('authPassword').value;
+  try {
+    const data = await apiJson('/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password }),
+    });
+    setAuthUser(data.user);
+    hideAuth();
+    loadProfiles();
+    loadHistory();
+    loadAnalytics();
+  } catch (err) {
+    document.getElementById('authError').textContent = err.message;
+  }
+}
+
+async function logoutUser() {
+  try {
+    await apiJson('/auth/logout', { method: 'POST' });
+  } catch {}
+  setAuthUser(null);
+  showAuth();
+}
+
 async function apiJson(path, options = {}) {
-  const res = await fetch(`${BACKEND}${path}`, options);
+  const merged = {
+    credentials: 'include',
+    ...options,
+  };
+  const res = await fetch(`${BACKEND}${path}`, merged);
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    showAuth();
+    throw new Error('Please login to continue');
+  }
   if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
   return data;
 }
@@ -864,7 +976,7 @@ async function runPipeline() {
   }
 
   try {
-    const res = await fetch(`${BACKEND}/run`, { method: 'POST', body: fd });
+    const res = await fetch(`${BACKEND}/run`, { method: 'POST', body: fd, credentials: 'include' });
 
     if (!res.ok) {
       let detail = '';
@@ -872,6 +984,9 @@ async function runPipeline() {
         const body = await res.json();
         detail = body.error ? ` ${body.error}` : '';
       } catch {}
+      if (res.status === 401) {
+        showAuth();
+      }
       throw new Error(`Server returned ${res.status}.${detail} Run: python main.py`);
     }
 
@@ -1095,9 +1210,13 @@ function resetAll() {
 
 updateRunLabel();
 configureVisibleAgents();
-loadProfiles();
-loadHistory();
-loadAnalytics();
+checkAuth().then((ok) => {
+  if (ok) {
+    loadProfiles();
+    loadHistory();
+    loadAnalytics();
+  }
+});
 </script>
 </body>
 </html>

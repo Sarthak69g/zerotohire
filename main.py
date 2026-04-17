@@ -9,8 +9,9 @@ from urllib.parse import urlparse
 
 from crewai import Agent, Crew, LLM, Task
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, request, send_file, stream_with_context
+from flask import Flask, Response, jsonify, request, send_file, session, stream_with_context
 from flask_cors import CORS
+from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 # ── PDF support (optional but recommended) ──────────────
@@ -50,16 +51,25 @@ BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR / "outputs"
 PROFILE_DIR = BASE_DIR / "profiles"
 TRACKER_FILE = OUTPUT_DIR / "application_tracker.json"
+LOCAL_DATA_DIR = BASE_DIR / ".data"
+LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+USERS_FILE = LOCAL_DATA_DIR / "users.json"
 OUTPUT_DIR.mkdir(exist_ok=True)
 PROFILE_DIR.mkdir(exist_ok=True)
 if not TRACKER_FILE.exists():
     TRACKER_FILE.write_text("{}", encoding="utf-8")
+if not USERS_FILE.exists():
+    USERS_FILE.write_text("{}", encoding="utf-8")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
+app.secret_key = os.getenv("SESSION_SECRET", "change-me-in-production")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
 
 allowed_origin = os.getenv("FRONTEND_ORIGIN", "*")
-CORS(app, resources={r"/*": {"origins": allowed_origin}})
+CORS(app, resources={r"/*": {"origins": allowed_origin}}, supports_credentials=True)
 
 
 def wants(field, default=True):
@@ -67,6 +77,50 @@ def wants(field, default=True):
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+def read_users():
+    data = read_json(USERS_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def write_users(data):
+    write_json(USERS_FILE, data)
+
+
+def next_user_id(users):
+    if not users:
+        return 1
+    return max(int(user.get("id", 0)) for user in users.values()) + 1
+
+
+def current_user_id():
+    return session.get("user_id")
+
+
+def current_user():
+    user_id = current_user_id()
+    if not user_id:
+        return None
+    users = read_users()
+    for user in users.values():
+        if user.get("id") == user_id:
+            return {
+                "id": user.get("id"),
+                "name": user.get("name"),
+                "email": user.get("email"),
+                "created_at": user.get("created_at"),
+            }
+    return None
+
+
+def require_user():
+    user_id = current_user_id()
+    if not user_id:
+        return None, jsonify({"error": "Authentication required"}), 401
+    return user_id, None, None
+
+
 
 
 def read_json(path, fallback):
@@ -531,6 +585,7 @@ def save_outputs(company, payload, metadata):
     tracker = read_tracker()
     tracker[run_id] = {
         'run_id': run_id,
+        'user_id': metadata.get('user_id'),
         'company': metadata.get('company', company),
         'role': metadata.get('job_url', ''),
         'status': tracker.get(run_id, {}).get('status', 'Generated'),
@@ -541,14 +596,14 @@ def save_outputs(company, payload, metadata):
     return saved
 
 
-def list_runs():
+def list_runs(user_id):
     tracker = read_tracker()
     runs = []
     for path in OUTPUT_DIR.iterdir():
         if not path.is_dir():
             continue
         metadata = read_json(path / 'metadata.json', None)
-        if metadata:
+        if metadata and metadata.get('user_id') == user_id:
             tracked = tracker.get(metadata.get('run_id', ''), {})
             metadata['application_status'] = tracked.get('status', 'Generated')
             metadata['application_notes'] = tracked.get('notes', '')
@@ -564,12 +619,14 @@ def get_run_dir(run_id):
     return run_dir
 
 
-def load_run(run_id):
+def load_run(user_id, run_id):
     run_dir = get_run_dir(run_id)
     if not run_dir:
         return None
 
     metadata = read_json(run_dir / 'metadata.json', {})
+    if metadata.get('user_id') != user_id:
+        return None
     tracker = read_tracker().get(run_id, {})
     metadata['application_status'] = tracker.get('status', metadata.get('application_status', 'Generated'))
     metadata['application_notes'] = tracker.get('notes', metadata.get('application_notes', ''))
@@ -579,9 +636,11 @@ def load_run(run_id):
     return {'metadata': metadata, 'files': files}
 
 
-def profile_path(profile_id):
+def profile_path(user_id, profile_id):
+    user_dir = PROFILE_DIR / f"user_{user_id}"
+    user_dir.mkdir(parents=True, exist_ok=True)
     safe_id = secure_filename(profile_id or 'default') or 'default'
-    return PROFILE_DIR / f'{safe_id}.json'
+    return user_dir / f'{safe_id}.json'
 
 
 def fetch_job_text(url):
@@ -606,10 +665,74 @@ def fetch_job_text(url):
     body = clean_text(soup.get_text(' '))
     return {'title': title, 'text': body[:12000], 'source_url': url}
 
+
+@app.route('/auth/register', methods=['POST'])
+def auth_register():
+    data = request.get_json(silent=True) or {}
+    name = clean_text(data.get('name')) or 'Candidate'
+    email = clean_text(data.get('email')).lower()
+    password = str(data.get('password') or '')
+
+    if not email or '@' not in email:
+        return jsonify({'error': 'Valid email is required'}), 400
+    if len(password) < 8:
+        return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+    users = read_users()
+    if email in users:
+        return jsonify({'error': 'Email already registered'}), 409
+
+    user_id = next_user_id(users)
+    users[email] = {
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "password_hash": generate_password_hash(password),
+        "created_at": datetime.now().isoformat(timespec='seconds'),
+    }
+    write_users(users)
+
+    session['user_id'] = user_id
+    return jsonify({'user': {'id': user_id, 'name': name, 'email': email}})
+
+
+@app.route('/auth/login', methods=['POST'])
+def auth_login():
+    data = request.get_json(silent=True) or {}
+    email = clean_text(data.get('email')).lower()
+    password = str(data.get('password') or '')
+    if not email or not password:
+        return jsonify({'error': 'Email and password are required'}), 400
+
+    user = read_users().get(email)
+    if not user or not check_password_hash(user.get('password_hash', ''), password):
+        return jsonify({'error': 'Invalid credentials'}), 401
+
+    session['user_id'] = user['id']
+    return jsonify({'user': {'id': user['id'], 'name': user['name'], 'email': user['email']}})
+
+
+@app.route('/auth/logout', methods=['POST'])
+def auth_logout():
+    session.clear()
+    return jsonify({'ok': True})
+
+
+@app.route('/auth/me', methods=['GET'])
+def auth_me():
+    user = current_user()
+    if not user:
+        return jsonify({'authenticated': False}), 401
+    return jsonify({'authenticated': True, 'user': user})
+
  
 # ── MAIN RUN ENDPOINT (SSE streaming) ──────────────────
 @app.route('/run', methods=['POST'])
 def run_pipeline():
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+
     jd = request.form.get('jd', '').strip()
     name = request.form.get('name', 'Candidate').strip() or 'Candidate'
     company = request.form.get('company', 'the Company').strip() or 'the Company'
@@ -713,6 +836,7 @@ def run_pipeline():
             }
             metadata = {
                 'run_id': run_id,
+                'user_id': user_id,
                 'created_at': datetime.now().isoformat(timespec='seconds'),
                 'name': name,
                 'company': company,
@@ -740,12 +864,18 @@ def run_pipeline():
 
 @app.route('/history', methods=['GET'])
 def history():
-    return jsonify({'runs': list_runs()})
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+    return jsonify({'runs': list_runs(user_id)})
 
 
 @app.route('/history/<run_id>', methods=['GET'])
 def history_detail(run_id):
-    run = load_run(run_id)
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+    run = load_run(user_id, run_id)
     if not run:
         return jsonify({'error': 'Run not found'}), 404
     return jsonify(run)
@@ -753,11 +883,16 @@ def history_detail(run_id):
 
 @app.route('/download/<run_id>/<file_key>', methods=['GET'])
 def download_run_file(run_id, file_key):
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
     run_dir = get_run_dir(run_id)
     if not run_dir:
         return jsonify({'error': 'Run not found'}), 404
 
     metadata = read_json(run_dir / 'metadata.json', {})
+    if metadata.get('user_id') != user_id:
+        return jsonify({'error': 'File not found'}), 404
     saved_files = metadata.get('saved_files', {})
     path = saved_files.get(file_key)
     if not path:
@@ -773,8 +908,13 @@ def download_run_file(run_id, file_key):
 
 @app.route('/profiles', methods=['GET'])
 def profiles():
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+
+    user_dir = PROFILE_DIR / f"user_{user_id}"
     data = []
-    for path in PROFILE_DIR.glob('*.json'):
+    for path in user_dir.glob('*.json'):
         profile = read_json(path, {})
         if profile:
             data.append(profile)
@@ -783,6 +923,10 @@ def profiles():
 
 @app.route('/profiles', methods=['POST'])
 def save_profile():
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+
     data = request.get_json(silent=True) or {}
     name = clean_text(data.get('name')) or 'Default Profile'
     profile_id = secure_filename(data.get('id') or name.lower().replace(' ', '-')) or 'default'
@@ -793,7 +937,7 @@ def save_profile():
         'resume_text': str(data.get('resume_text') or '').strip(),
         'updated_at': datetime.now().isoformat(timespec='seconds'),
     }
-    write_json(profile_path(profile_id), profile)
+    write_json(profile_path(user_id, profile_id), profile)
     return jsonify({'profile': profile})
 
 
@@ -811,13 +955,21 @@ def fetch_job():
 
 @app.route('/tracker', methods=['GET'])
 def tracker_get():
-    entries = list(read_tracker().values())
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+
+    entries = [item for item in read_tracker().values() if item.get('user_id') == user_id]
     entries.sort(key=lambda item: item.get('updated_at', ''), reverse=True)
     return jsonify({'items': entries})
 
 
 @app.route('/tracker', methods=['POST'])
 def tracker_update():
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+
     data = request.get_json(silent=True) or {}
     run_id = clean_text(data.get('run_id'))
     if not run_id:
@@ -825,8 +977,11 @@ def tracker_update():
 
     tracker = read_tracker()
     current = tracker.get(run_id, {})
+    if current and current.get('user_id') != user_id:
+        return jsonify({'error': 'Run not found'}), 404
     item = {
         'run_id': run_id,
+        'user_id': user_id,
         'company': clean_text(data.get('company')) or current.get('company', ''),
         'role': clean_text(data.get('role')) or current.get('role', ''),
         'status': clean_text(data.get('status')) or current.get('status', 'Generated'),
@@ -840,7 +995,11 @@ def tracker_update():
 
 @app.route('/analytics', methods=['GET'])
 def analytics():
-    runs = list_runs()
+    user_id, error_resp, status = require_user()
+    if error_resp:
+        return error_resp, status
+
+    runs = list_runs(user_id)
     tracker = read_tracker()
     count = len(runs)
 
