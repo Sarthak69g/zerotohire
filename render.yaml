@@ -1,3 +1,9 @@
+databases:
+  - name: autoapply-ai-db
+    plan: free
+    databaseName: autoapply_ai
+    user: autoapply_ai
+
 services:
   - type: web
     name: autoapply-ai
@@ -12,3 +18,14 @@ services:
         value: groq/llama-3.3-70b-versatile
       - key: FRONTEND_ORIGIN
         value: "*"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: autoapply-ai-db
+          property: connectionString
+      # Render's free Postgres is deleted after 90 days — fine to start,
+      # but plan to upgrade before that window closes if this is live.
+      # REDIS_URL: add a Render Key Value (Redis) instance and paste its
+      # connection string here — not auto-wired since the free Key Value
+      # plan isn't declarable the same way as databases yet.
+      - key: REDIS_URL
+        sync: false

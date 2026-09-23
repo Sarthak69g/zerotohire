@@ -87,6 +87,18 @@ The project is ready for single-service deployment (backend + frontend in one Fl
 - `SESSION_COOKIE_SECURE` (`true` in production over HTTPS)
 - `PORT` (set by platform automatically)
 
+### Optional OTP providers
+
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` for email/Gmail OTP delivery
+- `OTP_DEV_MODE=true` to always return OTP in API response for local testing
+
+### Optional Google OAuth + role routing
+
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI` (optional; defaults to `<your-domain>/auth/google/callback`)
+- `ADMIN_EMAILS` comma-separated list for admin dashboard widgets
+- `RECRUITER_EMAILS` comma-separated list for recruiter dashboard widgets
+
 ### Render / Railway style deploy
 
 This repo now includes [render.yaml](C:/Users/SARTHAK/OneDrive/AutoApplyAI/render.yaml) for Render blueprint deploy.

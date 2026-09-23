@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service — ZeroToHire</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Barlow:wght@300;400;500;600;700;800;900&family=Barlow+Condensed:wght@700;800;900&display=swap"
+    rel="stylesheet">
+  <style>
+    :root {
+      --lime: #00ff88;
+      --lime-dim: #00cc6a;
+      --accent2: #7b61ff;
+      --black: #060608;
+      --surface: #0e0e12;
+      --surface2: #141418;
+      --border: rgba(255, 255, 255, 0.07);
+      --border-accent: rgba(0, 255, 136, 0.15);
+      --text: #eeeef0;
+      --text-muted: #4a4a55;
+      --text-sub: #7a7a88;
+      --red: #ff4466;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--black);
+      color: var(--text);
+      font-family: 'Barlow', sans-serif;
+      min-height: 100vh;
+      line-height: 1.7;
+    }
+
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 22px 40px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px;
+      letter-spacing: 3px;
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+
+    .nav-logo span { color: var(--lime); }
+
+    .back-link {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 1px;
+      color: var(--text-sub);
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 14px;
+      transition: border-color .15s, color .15s;
+    }
+
+    .back-link:hover { border-color: var(--border-accent); color: var(--lime); }
+
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 56px 24px 100px;
+    }
+
+    .doc-title {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 900;
+      font-size: 40px;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+    }
+
+    .doc-title span { color: var(--lime); }
+
+    .doc-meta {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      margin-bottom: 40px;
+    }
+
+    h2 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 800;
+      font-size: 20px;
+      letter-spacing: .5px;
+      color: var(--lime);
+      margin: 36px 0 12px;
+    }
+
+    p, li {
+      font-size: 14.5px;
+      color: var(--text-sub);
+      margin-bottom: 12px;
+    }
+
+    ul { padding-left: 20px; margin-bottom: 12px; }
+
+    strong { color: var(--text); }
+
+    a.inline-link { color: var(--lime); text-decoration: none; border-bottom: 1px solid var(--border-accent); }
+    a.inline-link:hover { color: var(--lime-dim); }
+
+    .callout {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent2);
+      border-radius: 6px;
+      padding: 14px 18px;
+      margin: 20px 0;
+      font-size: 13px;
+      color: var(--text-sub);
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 40px;
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+  </style>
+</head>
+
+<body>
+  <nav>
+    <a class="nav-logo" href="/">Zero<span>ToHire</span></a>
+    <a class="back-link" href="/">← Back to app</a>
+  </nav>
+
+  <main>
+    <h1 class="doc-title">Terms of <span>Service</span></h1>
+    <div class="doc-meta">LAST UPDATED: AUGUST 6, 2026 · ZEROTOHIRE (AUTOAPPLY AI)</div>
+
+    <p>These Terms of Service ("Terms") govern your use of ZeroToHire, also referred to as AutoApply AI (the
+      "Service"), operated as an independent project. By creating an account or using the Service, you agree to
+      these Terms. If you don't agree, please don't use the Service.</p>
+
+    <h2>1. What the Service Does</h2>
+    <p>ZeroToHire takes a job description and your resume/profile information and uses a chain of AI agents (built
+      with CrewAI, powered by Groq's LLaMA models) to generate a job-application kit: ATS analysis, a resume match
+      score, a rewritten resume, a cover letter, an interview prep kit, LinkedIn post drafts, salary estimates, and
+      related exports (DOCX/PDF/TXT).</p>
+
+    <div class="callout">
+      The Service uses generative AI. Outputs — resumes, cover letters, interview answers, salary estimates — are
+      AI-generated drafts. They can contain inaccuracies. You are responsible for reviewing, fact-checking, and
+      editing anything before you submit it to an employer, recruiter, or third party.
+    </div>
+
+    <h2>2. Accounts</h2>
+    <p>You may sign up with an email/password, an email OTP code, or Google Sign-In. You're responsible for keeping
+      your credentials secure and for all activity under your account. Passwords are stored as one-way hashes; we
+      never store your plaintext password.</p>
+
+    <h2>3. Acceptable Use</h2>
+    <p>You agree not to:</p>
+    <ul>
+      <li>Use the Service to generate content that is fraudulent, defamatory, or impersonates someone else's
+        credentials or work history;</li>
+      <li>Attempt to bypass rate limits, probe for vulnerabilities, or send abnormally large or malformed requests
+        to the API;</li>
+      <li>Use the automated cold-email or bulk job-fetch features to send unsolicited spam or scrape sites in
+        violation of their terms;</li>
+      <li>Upload or submit content you don't have the right to use, or content containing another person's private
+        data without consent.</li>
+    </ul>
+
+    <h2>4. Your Content</h2>
+    <p>You retain ownership of the resume text, job descriptions, and profile details you submit. By submitting
+      content, you grant the Service a limited license to process it (including sending it to Groq's API for AI
+      processing) solely to generate your requested outputs. We don't sell your content or use it to train
+      third-party models.</p>
+
+    <h2>5. Third-Party Services</h2>
+    <p>The Service relies on third parties to function: <strong>Groq</strong> (AI inference), <strong>Google</strong>
+      (optional sign-in), and an email provider (for OTP codes). Your use of the Service is also subject to those
+      providers' own terms where applicable. We aren't responsible for outages or issues originating from these
+      third-party providers.</p>
+
+    <h2>6. No Guarantee of Outcomes</h2>
+    <p>ZeroToHire is a productivity tool, not a guarantee of job offers, interviews, or application success. Match
+      scores, salary estimates, and ATS analysis are AI-generated estimates for guidance only and shouldn't be
+      treated as professional career, legal, or financial advice.</p>
+
+    <h2>7. Service Availability</h2>
+    <p>This is an actively developed, independently run project. Features, rate limits, and availability may change
+      or be interrupted without advance notice, and the Service may go offline for maintenance or upgrades.</p>
+
+    <h2>8. Termination</h2>
+    <p>You may stop using the Service and request account/data deletion at any time (see the Privacy Policy for
+      how). We may suspend or terminate accounts that violate these Terms, particularly the Acceptable Use section.
+    </p>
+
+    <h2>9. Limitation of Liability</h2>
+    <p>The Service is provided "as is," without warranties of any kind. To the fullest extent permitted by law, the
+      operator of this Service isn't liable for indirect, incidental, or consequential damages arising from your use
+      of the Service, including reliance on AI-generated content.</p>
+
+    <h2>10. Changes to These Terms</h2>
+    <p>These Terms may be updated as the Service evolves. Continued use after an update means you accept the revised
+      Terms. The "Last updated" date above will reflect the latest version.</p>
+
+    <h2>11. Contact</h2>
+    <p>Questions about these Terms can be sent to
+      <a class="inline-link" href="mailto:malaichaap3@gmail.com">malaichaap3@gmail.com</a>.
+    </p>
+  </main>
+
+  <footer>ZEROTOHIRE · BUILT BY SARTHAK · CREWAI + GROQ</footer>
+</body>
+
+</html>

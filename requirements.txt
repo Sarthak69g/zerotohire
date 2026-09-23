@@ -1,10 +1,16 @@
+apscheduler
 beautifulsoup4
 crewai
 flask
 flask-cors
+flask-limiter
+flask-sqlalchemy
 gunicorn
 pdfplumber
+psycopg2-binary
 python-docx
 python-dotenv
+razorpay
+redis
 reportlab
 requests
