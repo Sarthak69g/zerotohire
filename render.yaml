@@ -15,15 +15,25 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
-        value: groq/llama-3.3-70b-versatile
+        value: llama-3.3-70b-versatile
+      # REQUIRED: app refuses to start without it. Generate with
+      #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      # Set to your real site URL, e.g. https://autoapply-ai.onrender.com
       - key: FRONTEND_ORIGIN
-        value: "*"
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: autoapply-ai-db
           property: connectionString
-      # Render's free Postgres is deleted after 90 days — fine to start,
-      # but plan to upgrade before that window closes if this is live.
+      # WARNING: Render's free Postgres is deleted after 90 days and the free
+      # web service sleeps when idle. Fine for testing. Before real users:
+      #   Option A (cheapest): keep this, but set DATABASE_URL by hand to a free
+      #     Neon/Supabase Postgres (no expiry) and ping /health every 5 min.
+      #   Option B (simplest): change both `plan: free` lines to a paid plan.
       # REDIS_URL: add a Render Key Value (Redis) instance and paste its
       # connection string here — not auto-wired since the free Key Value
       # plan isn't declarable the same way as databases yet.

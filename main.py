@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
+import hashlib
+import hmac
 import html
+import io
 import ipaddress
 import secrets
 import socket
@@ -10,10 +13,11 @@ import random
 import re
 import smtplib
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from urllib.parse import urlencode, urljoin, urlparse
 
-from crewai import Agent, Crew, LLM, Task
+import kit_engine as ke
+from llm_client import LLMError, SimpleLLM, chat as llm_chat, chat_json as llm_chat_json
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, redirect, request, send_file, session, stream_with_context
 from flask_cors import CORS
@@ -150,16 +154,37 @@ with app.app_context():
     db.create_all()
     ensure_schema_up_to_date()
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024
-app.secret_key = os.getenv("SESSION_SECRET", "change-me-in-production")
+# ── SESSION SECRET (Phase 0 fix) ──────────────────────
+# The old default ("change-me-in-production") let anyone forge a login cookie
+# for any user. Now: no known default, ever.
+#   - Hosted (Render / DATABASE_URL / secure cookies): SESSION_SECRET is
+#     REQUIRED, the app refuses to start without a strong one.
+#   - Local dev: a random per-process secret is generated (sessions reset on
+#     restart, which is fine for dev).
+_KNOWN_WEAK_SECRETS = {"", "change-me-in-production", "replace_with_a_long_random_secret_string", "secret", "changeme"}
+_session_secret = os.getenv("SESSION_SECRET", "").strip()
+_is_hosted = bool(os.getenv("RENDER") or os.getenv("DATABASE_URL") or os.getenv("SESSION_COOKIE_SECURE", "").lower() == "true")
+if _session_secret in _KNOWN_WEAK_SECRETS or len(_session_secret) < 32:
+    if _is_hosted:
+        raise RuntimeError(
+            "SESSION_SECRET is missing, weak or default. Set a random 32+ char value "
+            "(python -c \"import secrets; print(secrets.token_urlsafe(48))\") in your host's env vars."
+        )
+    import secrets as _secrets
+    _session_secret = _secrets.token_urlsafe(48)
+    print("[security] SESSION_SECRET not set - using a random dev secret (sessions reset on restart).")
+app.secret_key = _session_secret
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
+# Secure cookies by default when hosted; override only for local http dev.
+app.config["SESSION_COOKIE_SECURE"] = os.getenv("SESSION_COOKIE_SECURE", "true" if _is_hosted else "false").lower() == "true"
 app.config["SESSION_COOKIE_NAME"] = "autoapply_session"
 app.config["PERMANENT_SESSION_LIFETIME"] = 86400
 app.config["SESSION_REFRESH_EACH_REQUEST"] = True
 
 allowed_origin = os.getenv("FRONTEND_ORIGIN", "*")
-CORS(app, resources={r"/*": {"origins": allowed_origin}}, supports_credentials=True)
+# Credentials (cookies) are only allowed to a specific origin, never with "*".
+CORS(app, resources={r"/*": {"origins": allowed_origin}}, supports_credentials=(allowed_origin != "*"))
 
 
 # ── RATE LIMITING ─────────────────────────────────────
@@ -349,7 +374,22 @@ def normalize_email(value):
 
 
 def generate_otp_code():
-    return f"{random.randint(100000, 999999)}"
+    # secrets (CSPRNG), not random: OTPs must not be predictable.
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+def mark_email_verified(email):
+    """Called once the person has proven they own `email` (OTP or Google).
+    If the account was created by a password sign-up that was never verified,
+    that password may have been set by SOMEONE ELSE who pre-registered the
+    address, so it is wiped; the real owner can set a new one later."""
+    row = User.query.filter_by(email=email).first()
+    if not row:
+        return
+    if row.email_verified is False and row.password_hash:
+        row.password_hash = ""
+    row.email_verified = True
+    db.session.commit()
 
 
 def otp_target_key(channel, target):
@@ -624,344 +664,15 @@ def write_tracker(data):
     db.session.commit()
 
 
-def get_company_intel(jd_analysis):
-    text = str(jd_analysis)
-
-    def section(pattern):
-        match = re.search(pattern, text, re.IGNORECASE)
-        if not match:
-            return []
-        rows = []
-        for line in match.group(1).splitlines():
-            clean = re.sub(r'^[\s\-*•\d.)]+', '', line).strip()
-            if clean:
-                rows.append(clean)
-        return rows[:8]
-
-    role_summary = section(r'Role Summary\s*:?\s*([\s\S]*?)(?:\n\s*\d+\.|\n\s*Must-Have|\Z)')
-    must_have = section(r'Must-Have Skills\s*:?\s*([\s\S]*?)(?:\n\s*\d+\.|\n\s*Nice-to-Have|\Z)')
-    culture = section(r'(?:Vibe Signals|Culture Signals)\s*:?\s*([\s\S]*?)(?:\n\s*\d+\.|\n\s*What The Resume Must Prove|\Z)')
-    proof = section(r'What The Resume Must Prove\s*:?\s*([\s\S]*?)(?:\n\s*\d+\.|\Z)')
-
-    return {
-        'role_summary': role_summary[:3],
-        'must_have': must_have[:6],
-        'culture_signals': culture[:4],
-        'proof_points': proof[:5],
-    }
-
 # ── LLM ────────────────────────────────────────────────
+# One thin client (llm_client.py) and ONE default model. The old CrewAI
+# "agents" were each a single prompt; see kit_engine.py for the prompts.
 def get_llm(temperature=0.35):
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY is missing. Add it to .env and restart Flask.")
-
-    return LLM(
-        model=os.getenv("GROQ_MODEL", "groq/openai/gpt-oss-120b"),
-        api_key=api_key,
-        temperature=temperature,
-    )
-
-# ── AGENTS ─────────────────────────────────────────────
-def build_agents(llm):
-    truth_rule = (
-        "Never invent experience, employers, degrees, certifications, tools, numbers, "
-        "or achievements. If evidence is missing, say so and improve only by honest reframing."
-    )
-
-    jd_reader = Agent(
-        role="Job Description Analyst",
-        goal="Extract the role requirements, hiring signals, and ATS keywords from a job description.",
-        backstory=f"Senior HR analyst and ATS keyword specialist. {truth_rule}",
-        llm=llm, verbose=False
-    )
-
-    resume_analyser = Agent(
-        role="Resume Analyser",
-        goal="Score resume fit against the job description and identify precise gaps.",
-        backstory=f"Technical recruiter who gives direct, evidence-backed fit analysis. {truth_rule}",
-        llm=llm, verbose=False
-    )
-
-    resume_rewriter = Agent(
-        role="Professional Resume Rewriter",
-        goal="Rewrite the resume for the target role using honest, ATS-friendly positioning.",
-        backstory=f"Resume strategist for early-career tech candidates. {truth_rule}",
-        llm=llm, verbose=False
-    )
-
-    cover_letter_writer = Agent(
-        role="Expert Cover Letter Writer",
-        goal="Write a concise, specific cover letter that sounds human and confident.",
-        backstory=f"Cover letter specialist who avoids generic filler. {truth_rule}",
-        llm=llm, verbose=False
-    )
-
-    interview_coach = Agent(
-        role="Technical Interview Coach",
-        goal="Prepare role-specific interview questions and strong answers from the candidate's actual background.",
-        backstory=f"Senior interview coach for junior and internship tech candidates. {truth_rule}",
-        llm=llm, verbose=False
-    )
-
-    return {
-        "jd": jd_reader,
-        "analysis": resume_analyser,
-        "resume": resume_rewriter,
-        "cover": cover_letter_writer,
-        "interview": interview_coach,
-    }
+    """Small shim for one-off prompts (autopilot re-rank, LinkedIn post)."""
+    return SimpleLLM(temperature=temperature)
 
 
-# ── TASKS ──────────────────────────────────────────────
-def build_jd_task(agent, jd):
-    return Task(
-        description=f"""Analyze this job description with hiring precision.
-
-Return these sections:
-1. Role Summary: 2-3 lines
-2. Must-Have Skills
-3. Nice-to-Have Skills
-4. ATS Keywords: at least 15 keywords and phrases
-5. Responsibility Signals
-6. Company / Team Vibe Signals
-7. What The Resume Must Prove
-
-Job Description:
-{jd}""",
-        expected_output="Structured job description analysis with ATS keywords and proof points.",
-        agent=agent
-    )
-
-
-def build_analysis_task(agent, jd_analysis, resume):
-    return Task(
-        description=f"""Compare the resume against the job analysis below.
-
-Return a short JSON block first, then a readable analysis.
-JSON schema:
-{{
-  "match_score": 0-10,
-  "ats_keywords_found": 0-50,
-  "strongest_matches": ["..."],
-  "biggest_gaps": ["..."],
-  "top_recommendations": ["..."]
-}}
-
-After the JSON, include:
-1. Matching skills and evidence
-2. Missing skills / gaps
-3. ATS keyword opportunities
-4. Specific resume improvements
-
-Job Analysis:
-{jd_analysis}
-
-Resume:
-{resume}""",
-        expected_output="JSON score block followed by practical fit analysis.",
-        agent=agent
-    )
-
-
-def build_resume_task(agent, name, jd_analysis, resume_analysis, resume):
-    return Task(
-        description=f"""Rewrite the resume for {name}.
-
-Use the job analysis and resume analysis below. Keep the resume honest.
-Do:
-1. Preserve real projects, education, skills, and timeline.
-2. Add ATS keywords only where supported by the existing background.
-3. Strengthen bullet points with clearer impact.
-4. Use action verbs and concise bullets.
-5. Include a tight summary, skills, projects, education, and certifications.
-
-Do not fabricate metrics. If a metric is unknown, write the bullet without a fake number.
-
-Job Analysis:
-{jd_analysis}
-
-Resume Analysis:
-{resume_analysis}
-
-Original Resume:
-{resume}""",
-        expected_output="A complete rewritten resume ready to copy-paste.",
-        agent=agent
-    )
-
-
-def build_cover_task(agent, name, company, jd_analysis, resume_analysis, resume):
-    return Task(
-        description=f"""Write a cover letter for {name} applying to {company}.
-
-Rules:
-1. Under 300 words.
-2. Open with a specific hook, not 'I am applying for'.
-3. Connect actual projects and skills to the role.
-4. Address one gap with confident learning momentum if useful.
-5. Sound direct, warm, and human.
-6. End with a clear call to action.
-
-Job Analysis:
-{jd_analysis}
-
-Resume Analysis:
-{resume_analysis}
-
-Resume:
-{resume}""",
-        expected_output="A polished cover letter under 300 words.",
-        agent=agent
-    )
-
-
-def build_interview_task(agent, name, company, jd, jd_analysis, resume_analysis, resume):
-    return Task(
-        description=f"""Build an interview prep kit for {name} applying to {company}.
-
-Include:
-1. 5 technical questions with strong answers.
-2. 3 behavioral questions with STAR-style answers.
-3. 2 tricky questions about gaps or weaknesses with honest answers.
-4. 3 smart questions to ask the interviewer.
-5. A 60-second self-introduction tailored to the role.
-
-Every answer should reference the candidate's real background where possible.
-
-Job Description:
-{jd}
-
-Job Analysis:
-{jd_analysis}
-
-Resume Analysis:
-{resume_analysis}
-
-Resume:
-{resume}""",
-        expected_output="A complete interview prep kit with tailored answers.",
-        agent=agent
-    )
-
-
-def kickoff_single(agent, task):
-    crew = Crew(agents=[agent], tasks=[task], verbose=False)
-    return str(crew.kickoff())
-
-
-# ── PARSE SCORES FROM AGENT OUTPUT ─────────────────────
-def extract_json(text):
-    match = re.search(r"\{[\s\S]*?\}", str(text))
-    if not match:
-        return {}
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return {}
-
-
-def parse_scores(analyser_output):
-    text = str(analyser_output)
-    data = extract_json(text)
-
-    # ── match_score ───────────────────────────────────────────
-    match_score = data.get("match_score") or data.get("score") or data.get("overall_score")
-    if match_score is None:
-        # Try every possible pattern in the raw text
-        for pat in [
-            r'"match_score"\s*:\s*(\d+(?:\.\d+)?)',
-            r'match.?score[^\d]*(\d+(?:\.\d+)?)\s*/\s*10',
-            r'(\d+(?:\.\d+)?)\s*/\s*10',
-            r'score[^\d]*(\d+(?:\.\d+)?)',
-        ]:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                match_score = float(m.group(1))
-                break
-        else:
-            match_score = 7  # safe fallback
-
-    try:
-        match_score = max(0, min(10, round(float(str(match_score)))))
-    except Exception:
-        match_score = 7
-
-    # ── kw_count ──────────────────────────────────────────────
-    kw_count = data.get("ats_keywords_found") or data.get("keywords_found") or data.get("keyword_count")
-    if kw_count is None:
-        for pat in [
-            r'"ats_keywords_found"\s*:\s*(\d+)',
-            r'ATS Keywords Found[:\s]+(\d+)',
-            r'keywords?\s+found[:\s]+(\d+)',
-            r'(\d+)\s+keywords?',
-        ]:
-            k = re.search(pat, text, re.IGNORECASE)
-            if k:
-                kw_count = int(k.group(1))
-                break
-        else:
-            kw_count = 12
-
-    try:
-        kw_count = max(0, int(kw_count))
-    except Exception:
-        kw_count = 12
-
-    return match_score, kw_count
-
-
-def extract_keywords(jd_analysis):
-    text = str(jd_analysis)
-    keywords = []
-
-    section = re.search(
-        r'ATS Keywords\s*:?\s*([\s\S]*?)(?:\n\s*\d+\.|\n\s*[A-Z][A-Za-z /]+:|\Z)',
-        text,
-        re.IGNORECASE,
-    )
-    source = section.group(1) if section else text
-
-    for line in source.splitlines():
-        line = re.sub(r'^[\s\-*•\d.)]+', '', line).strip()
-        if not line:
-            continue
-        parts = [part.strip(" .;:") for part in re.split(r',|;', line)]
-        keywords.extend(part for part in parts if 2 <= len(part) <= 40)
-
-    seen = set()
-    unique = []
-    for keyword in keywords:
-        key = keyword.lower()
-        if key not in seen and len(unique) < 30:
-            seen.add(key)
-            unique.append(keyword)
-
-    if unique:
-        return unique
-
-    fallback = re.findall(r'\b[A-Za-z][A-Za-z+#. -]{2,24}\b', text)
-    stop = {'the', 'and', 'for', 'with', 'from', 'this', 'that', 'role', 'skills'}
-    for item in fallback:
-        key = clean_text(item).lower()
-        if key and key not in stop and key not in seen and len(unique) < 20:
-            seen.add(key)
-            unique.append(clean_text(item))
-
-    return unique
-
-
-def build_heatmap(jd_analysis, resume_text):
-    resume_lower = resume_text.lower()
-    items = []
-    for keyword in extract_keywords(jd_analysis):
-        found = keyword.lower() in resume_lower
-        items.append({
-            'keyword': keyword,
-            'found': found,
-            'status': 'found' if found else 'missing',
-        })
-    return items
+PIPELINE_PARALLEL = max(1, safe_int(os.getenv('PIPELINE_PARALLEL', '4'), default=4, min_val=1, max_val=8))
 
 
 def tokenize_words(text):
@@ -983,126 +694,80 @@ def top_keywords(text, limit=40):
     return [word for word, _ in ranked[:limit]]
 
 
-def render_docx(path, title, sections):
-    if not DOCX_SUPPORT:
-        return False
-
-    doc = Document()
-    doc.add_heading(title, level=1)
-    for heading, body in sections:
-        if not body:
-            continue
-        doc.add_heading(heading, level=2)
-        for line in str(body).splitlines():
-            line = line.strip()
-            if line:
-                doc.add_paragraph(line)
-    doc.save(path)
-    return True
-
-
-def render_pdf(path, title, sections):
-    if not PDF_EXPORT_SUPPORT:
-        return False
-
-    styles = getSampleStyleSheet()
-    story = [Paragraph(title, styles['Title']), Spacer(1, 12)]
-    for heading, body in sections:
-        if not body:
-            continue
-        story.append(Paragraph(heading, styles['Heading2']))
-        for block in str(body).splitlines():
-            block = block.strip()
-            if block:
-                story.append(Paragraph(html.escape(block), styles['BodyText']))
-        story.append(Spacer(1, 10))
-    SimpleDocTemplate(str(path), pagesize=letter).build(story)
-    return True
-
-
+# ── RESUME INTAKE ──────────────────────────────────────
 def read_resume_from_request():
-    resume_text = request.form.get('resume_text', '').strip()
-
-    if 'resume' not in request.files or not request.files['resume'].filename:
-        return resume_text
-
-    uploaded = request.files['resume']
-    filename = secure_filename(uploaded.filename).lower()
-
-    if filename.endswith('.pdf'):
-        if not PDF_SUPPORT:
-            raise RuntimeError('PDF upload needs pdfplumber. Install it with: pip install pdfplumber')
-
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
-                tmp_path = tmp.name
-                uploaded.save(tmp_path)
-            with pdfplumber.open(tmp_path) as pdf:
-                return '\n'.join(page.extract_text() or '' for page in pdf.pages).strip()
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-
-    return uploaded.read().decode('utf-8', errors='ignore').strip()
+    """Validated resume text from an upload (PDF/DOCX/TXT) or pasted text.
+    Raises ke.ResumeError with a message that is safe to show the user."""
+    text = request.form.get('resume_text', '').strip()
+    upload = request.files.get('resume')
+    if upload and upload.filename:
+        data = upload.read()
+        text = ke.extract_resume_from_file(secure_filename(upload.filename), data)
+    return ke.validate_resume_text(text)
 
 
-def save_outputs(company, payload, metadata):
-    run_id = metadata['run_id']
-    run_dir = OUTPUT_DIR / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+# ── KIT STORAGE (database) + FILES ON DEMAND ───────────
+KIT_TEXT_KEYS = ('jd_analysis', 'resume_analysis', 'rewritten_resume', 'cover_letter', 'interview_prep')
 
-    file_map = {
-        'jd_analysis': 'jd_analysis.txt',
-        'resume_analysis': 'resume_analysis.txt',
-        'rewritten_resume': 'rewritten_resume.txt',
-        'cover_letter': 'cover_letter.txt',
-        'interview_prep': 'interview_prep.txt',
-    }
 
-    saved = {}
-    for key, filename in file_map.items():
-        value = payload.get(key, '')
-        if value:
-            path = run_dir / filename
-            path.write_text(value, encoding='utf-8')
-            saved[key] = str(path)
+def kit_file_catalog(texts):
+    """{download_key: file name} for the files this kit can produce. The
+    files themselves are generated on demand, so nothing lives on disk."""
+    catalog = {}
+    for key in KIT_TEXT_KEYS:
+        if texts.get(key):
+            catalog[key] = f'{key}.txt'
+    if texts.get('rewritten_resume'):
+        catalog['rewritten_resume_docx'] = 'rewritten_resume.docx'
+        catalog['rewritten_resume_pdf'] = 'rewritten_resume.pdf'
+    if any(texts.get(key) for key in KIT_TEXT_KEYS):
+        catalog['application_kit_docx'] = 'application_kit.docx'
+        catalog['application_kit_pdf'] = 'application_kit.pdf'
+    return catalog
 
-    kit_sections = [
-        ('Rewritten Resume', payload.get('rewritten_resume', '')),
-        ('Cover Letter', payload.get('cover_letter', '')),
-        ('Interview Prep', payload.get('interview_prep', '')),
-        ('ATS Report', (payload.get('jd_analysis', '') + '\n\n' + payload.get('resume_analysis', '')).strip()),
+
+def kit_sections(texts):
+    fit = re.sub(r'(?m)^##\s', '### ', texts.get('resume_analysis', ''))
+    report = texts.get('jd_analysis', '')
+    if fit:
+        report = (report + '\n\n## Resume Fit Analysis\n\n' + fit).strip()
+    return [
+        ('Rewritten Resume', texts.get('rewritten_resume', '')),
+        ('Cover Letter', texts.get('cover_letter', '')),
+        ('Interview Prep', texts.get('interview_prep', '')),
+        ('ATS Report', report),
     ]
-    resume_sections = [('Rewritten Resume', payload.get('rewritten_resume', ''))]
 
-    if payload.get('rewritten_resume'):
-        docx_path = run_dir / 'rewritten_resume.docx'
-        pdf_path = run_dir / 'rewritten_resume.pdf'
-        if render_docx(docx_path, 'Rewritten Resume', resume_sections):
-            saved['rewritten_resume_docx'] = str(docx_path)
-        if render_pdf(pdf_path, 'Rewritten Resume', resume_sections):
-            saved['rewritten_resume_pdf'] = str(pdf_path)
 
-    kit_docx = run_dir / 'application_kit.docx'
-    kit_pdf = run_dir / 'application_kit.pdf'
-    if render_docx(kit_docx, 'ZeroToHire Application Kit', kit_sections):
-        saved['application_kit_docx'] = str(kit_docx)
-    if render_pdf(kit_pdf, 'ZeroToHire Application Kit', kit_sections):
-        saved['application_kit_pdf'] = str(kit_pdf)
+def render_kit_file(key, texts):
+    """-> (bytes, mimetype, download_name) or None if the kit can't make `key`."""
+    catalog = kit_file_catalog(texts)
+    name = catalog.get(key)
+    if not name:
+        return None
+    docx_mime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    if key in KIT_TEXT_KEYS:
+        return ke.markdown_to_plain(texts[key]).encode('utf-8'), 'text/plain; charset=utf-8', name
+    if key == 'rewritten_resume_docx':
+        return ke.markdown_to_docx(texts['rewritten_resume'], resume_style=True), docx_mime, name
+    if key == 'rewritten_resume_pdf':
+        return ke.markdown_to_pdf(texts['rewritten_resume'], resume_style=True), 'application/pdf', name
+    if key == 'application_kit_docx':
+        return ke.sections_to_docx(kit_sections(texts), 'ZeroToHire Application Kit'), docx_mime, name
+    if key == 'application_kit_pdf':
+        return ke.sections_to_pdf(kit_sections(texts), 'ZeroToHire Application Kit'), 'application/pdf', name
+    return None
 
-    # Generated files (txt/docx/pdf) live on disk under outputs/<run_id>/ —
-    # no reason to put binary documents in SQLite. Only the metadata that
-    # the dashboard/history/tracker actually query on goes in the DB.
-    metadata['saved_files'] = saved
-    write_json(run_dir / 'metadata.json', metadata)  # kept as an on-disk backup / debugging aid
 
+def save_outputs(company, texts, metadata):
+    """Store the kit text + metadata in the database. Returns the file catalog."""
+    run_id = metadata['run_id']
     extra_fields = {
         k: v for k, v in metadata.items()
         if k not in {
             'run_id', 'user_id', 'created_at', 'name', 'company', 'job_url',
             'profile_id', 'match_score', 'kw_count', 'elapsed',
-            'application_status', 'application_notes',
+            'application_status', 'application_notes', 'saved_files',
         }
     }
 
@@ -1115,16 +780,36 @@ def save_outputs(company, payload, metadata):
     run.role = metadata.get('job_url', '')
     run.profile_id = metadata.get('profile_id', 'default')
     run.candidate_name = metadata.get('name', '')
-    run.match_score = metadata.get('match_score', 0)
+    run.match_score = metadata.get('match_score')   # None = not scored
     run.kw_count = metadata.get('kw_count', 0)
     run.elapsed = metadata.get('elapsed', 0)
     run.status = run.status or 'Generated'
     run.has_kit = True
+    run.kit_json = json.dumps({key: texts.get(key, '') for key in KIT_TEXT_KEYS})
     run.extra_json = json.dumps(extra_fields)
     run.created_at = metadata.get('created_at') or run.created_at or datetime.now().isoformat(timespec='seconds')
     run.updated_at = datetime.now().isoformat(timespec='seconds')
     db.session.commit()
-    return saved
+    return kit_file_catalog(texts)
+
+
+def kit_texts_for_run(run):
+    texts = {}
+    if run.kit_json:
+        try:
+            loaded = json.loads(run.kit_json)
+            texts = {k: str(loaded.get(k) or '') for k in KIT_TEXT_KEYS}
+        except (ValueError, AttributeError):
+            texts = {}
+    if not any(texts.values()):
+        # Runs saved before kits moved into the database: read the old files if they still exist.
+        run_dir = OUTPUT_DIR / secure_filename(run.run_id)
+        if run_dir.is_dir():
+            for key in KIT_TEXT_KEYS:
+                f = run_dir / f'{key}.txt'
+                if f.exists():
+                    texts[key] = f.read_text(encoding='utf-8', errors='ignore')
+    return texts
 
 
 def list_runs(user_id):
@@ -1133,30 +818,22 @@ def list_runs(user_id):
         .order_by(Run.created_at.desc())
         .all()
     )
-    return [r.to_metadata_dict() for r in rows]
-
-
-def get_run_dir(run_id):
-    safe_run_id = secure_filename(run_id)
-    run_dir = OUTPUT_DIR / safe_run_id
-    if not run_dir.exists() or not run_dir.is_dir():
-        return None
-    return run_dir
+    out = []
+    for r in rows:
+        item = r.to_metadata_dict()
+        item.pop('saved_files', None)   # old rows stored absolute server paths; never send those
+        out.append(item)
+    return out
 
 
 def load_run(user_id, run_id):
-    run_dir = get_run_dir(run_id)
-    if not run_dir:
-        return None
-
     run = Run.query.filter_by(run_id=run_id, has_kit=True).first()
     if not run or run.user_id != user_id:
         return None
+    texts = kit_texts_for_run(run)
     metadata = run.to_metadata_dict()
-    files = {}
-    for path in run_dir.glob('*.txt'):
-        files[path.stem] = path.read_text(encoding='utf-8')
-    return {'metadata': metadata, 'files': files}
+    metadata['saved_files'] = kit_file_catalog(texts)
+    return {'metadata': metadata, 'files': texts}
 
 
 def read_profile(user_id, profile_id):
@@ -1265,6 +942,7 @@ def fetch_job_text(url):
 
 
 @app.route('/auth/register', methods=['POST'])
+@limiter.limit("5 per minute; 20 per hour")
 def auth_register():
     data = request.get_json(silent=True) or {}
     name = safe_str(data.get('name'), max_len=150, default='Candidate') or 'Candidate'
@@ -1292,11 +970,13 @@ def auth_register():
     }
     write_users(users)
 
+    session.clear()
     session['user_id'] = user_id
     return jsonify({'user': {'id': user_id, 'name': name, 'email': email, 'phone': '', 'role': infer_user_role(email)}})
 
 
 @app.route('/auth/login', methods=['POST'])
+@limiter.limit("10 per minute; 40 per hour")
 def auth_login():
     data = request.get_json(silent=True) or {}
     email = normalize_email(data.get('email'))
@@ -1313,6 +993,7 @@ def auth_login():
     if not check_password_hash(password_hash, password):
         return jsonify({'error': 'Invalid credentials'}), 401
 
+    session.clear()
     session['user_id'] = user['id']
     return jsonify({'user': {
         'id': user['id'],
@@ -1350,7 +1031,7 @@ def auth_google_callback():
     state = request.args.get('state', '')
     code = request.args.get('code', '')
     # Allow state mismatch on localhost (session cookie lost across redirect)
-    is_local = request.host.startswith('127.0.0.1') or request.host.startswith('localhost')
+    is_local = (request.host.startswith('127.0.0.1') or request.host.startswith('localhost')) and not _is_hosted
     if not is_local:
         if not expected_state or not state or state != expected_state:
             return redirect("/login?error=google_state")
@@ -1392,6 +1073,9 @@ def auth_google_callback():
         email = normalize_email(profile.get("email"))
         if not email:
             return redirect("/login?error=google_email")
+        # Only trust an email Google itself has verified.
+        if not profile.get("verified_email", False):
+            return redirect("/login?error=google_email")
 
         users = read_users()
         user = users.get(email)
@@ -1409,6 +1093,8 @@ def auth_google_callback():
             users[email] = user
             write_users(users)
 
+        mark_email_verified(email)
+        session.clear()
         session['user_id'] = user['id']
         return redirect("/dashboard")
     except Exception:
@@ -1418,6 +1104,7 @@ def auth_google_callback():
 
 
 @app.route('/auth/request-otp', methods=['POST'])
+@limiter.limit("3 per minute; 10 per hour")
 def auth_request_otp():
     data = request.get_json(silent=True) or {}
     channel = clean_text(data.get('channel')).lower() or 'email'
@@ -1435,6 +1122,15 @@ def auth_request_otp():
     expires_at = datetime.now() + timedelta(minutes=5)
     key = otp_target_key(channel, target)
     otp_store = read_otps()
+    # One code per address per minute, so the form can't be used to spam
+    # someone's inbox (or burn the Gmail sending quota).
+    prev = otp_store.get(key)
+    if prev and prev.get('created_at'):
+        try:
+            if (datetime.now() - datetime.fromisoformat(prev['created_at'])).total_seconds() < 60:
+                return jsonify({'error': 'A code was just sent. Wait a minute before requesting another.'}), 429
+        except ValueError:
+            pass
     otp_store[key] = {
         'code': code,
         'channel': channel,
@@ -1452,7 +1148,7 @@ def auth_request_otp():
         sent = False
         message = str(exc)
 
-    debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true' or os.getenv('OTP_DEV_MODE', 'false').lower() == 'true'
+    debug_mode = (os.getenv('FLASK_DEBUG', 'false').lower() == 'true' or os.getenv('OTP_DEV_MODE', 'false').lower() == 'true') and not _is_hosted  # never leak codes on a hosted deploy
 
     if not sent and not debug_mode:
         # Delivery genuinely failed outside of a dev/local setup. Never leak
@@ -1476,6 +1172,7 @@ def auth_request_otp():
 
 
 @app.route('/auth/verify-otp', methods=['POST'])
+@limiter.limit("10 per minute; 30 per hour")
 def auth_verify_otp():
     data = request.get_json(silent=True) or {}
     channel = clean_text(data.get('channel')).lower() or 'email'
@@ -1510,13 +1207,15 @@ def auth_verify_otp():
         write_otps(otp_store)
         return jsonify({'error': 'Too many attempts. Request a new OTP.'}), 429
 
-    if entry.get('code') != code:
+    if not hmac.compare_digest(str(entry.get('code') or ''), code):
         entry['attempts'] = attempts + 1
         otp_store[key] = entry
         write_otps(otp_store)
         return jsonify({'error': 'Incorrect OTP'}), 401
 
     user = upsert_user_with_contact(name, channel, target)
+    mark_email_verified(target)
+    session.clear()  # fresh session on login (no fixation)
     session['user_id'] = user['id']
     otp_store.pop(key, None)
     write_otps(otp_store)
@@ -1570,14 +1269,14 @@ def run_pipeline():
     if len(jd) < 30:
         return jsonify({'error': 'Job description looks too short to analyze — paste the full listing.'}), 400
 
+    # A real resume is required: kits built from nothing are invented, which is the one thing this product must never do.
     try:
         resume_text = read_resume_from_request()
-    except RuntimeError as exc:
+    except ke.ResumeError as exc:
         return jsonify({'error': str(exc)}), 400
-
-    resume_text = safe_long_text(resume_text, max_len=20000)
-    if not resume_text:
-        resume_text = "No resume provided. Analyze only from the job description and clearly mention this limitation."
+    except Exception:
+        app.logger.exception('resume intake failed')
+        return jsonify({'error': 'Could not read the resume file. Please paste your resume text instead.'}), 400
 
     selected = {
         'resume': wants('include_resume'),
@@ -1586,83 +1285,91 @@ def run_pipeline():
         'ats': wants('include_ats'),
     }
 
+    def sse(obj):
+        return f"data: {json.dumps(obj)}\n\n"
+
     def generate():
         import time
         start = time.time()
-
+        pool = None
         try:
-            llm = get_llm()
-            agents = build_agents(llm)
-            results = {
-                'jd_analysis': '',
-                'resume_analysis': '',
-                'rewritten_resume': '',
-                'cover_letter': '',
-                'interview_prep': '',
-            }
+            # ── Step 1: understand the job (everything else needs it) ──
+            yield sse({'type': 'agent_start', 'agent': 1, 'label': 'JD Reader', 'step': 1, 'total': 2})
+            jd_data = llm_chat_json(ke.jd_analysis_messages(jd[:9000]), temperature=0.1, max_tokens=1600, timeout=60)
+            keywords = ke.build_keyword_list(jd_data, jd)
+            scoring = ke.score_resume(keywords, resume_text)       # honest score from real keyword coverage
+            jd_md = ke.jd_data_to_markdown(jd_data)
+            company_intel = ke.company_intel_from_jd(jd_data)
+            warnings = []
+            if scoring['match_score'] is None:
+                warnings.append('Not enough skills were found in this job description to score your match, so no score is shown.')
 
-            stages = [
-                ('jd', 1, 'JD Reader', build_jd_task(agents['jd'], jd)),
-                ('analysis', 2, 'Resume Analyser', None),
-            ]
+            results = {key: '' for key in KIT_TEXT_KEYS}
+            results['jd_analysis'] = jd_md
+
+            # ── Step 2: everything else, in parallel, shown as each finishes ──
+            heat = scoring['heatmap']
+            resume_prompt = resume_text[:12000]
+            jobs = {'resume_analysis': (2, 'Resume Analyser', ke.analysis_messages(jd_md, heat, resume_prompt),
+                                        dict(temperature=0.3, max_tokens=1500))}
             if selected['resume']:
-                stages.append(('resume', 3, 'Resume Rewriter', None))
+                jobs['rewritten_resume'] = (3, 'Resume Rewriter', ke.resume_messages(name, jd_md, heat, resume_prompt),
+                                            dict(temperature=0.3, max_tokens=2300))
             if selected['cover']:
-                stages.append(('cover', 4, 'Cover Letter Writer', None))
+                jobs['cover_letter'] = (4, 'Cover Letter Writer', ke.cover_messages(name, company, jd_md, heat, resume_prompt),
+                                        dict(temperature=0.6, max_tokens=800))
             if selected['interview']:
-                stages.append(('interview', 5, 'Interview Coach', None))
+                jobs['interview_prep'] = (5, 'Interview Coach', ke.interview_messages(name, company, jd_md, heat, resume_prompt),
+                                          dict(temperature=0.4, max_tokens=2800))
+            total = 1 + len(jobs)
 
-            total = len(stages)
+            yield sse({'type': 'agent_done', 'agent': 1, 'label': 'JD Reader', 'step': 1, 'total': total})
+            yield sse({
+                'type': 'partial', 'stage': 'jd_analysis', 'text': jd_md, 'heatmap': heat,
+                'match_score': scoring['match_score'], 'kw_count': scoring['kw_found'],
+                'kw_total': scoring['kw_total'], 'company_intel': company_intel,
+            })
 
-            for index, (stage, agent_number, label, task) in enumerate(stages, start=1):
-                if stage == 'analysis':
-                    task = build_analysis_task(agents['analysis'], results['jd_analysis'], resume_text)
-                elif stage == 'resume':
-                    task = build_resume_task(
-                        agents['resume'], name, results['jd_analysis'], results['resume_analysis'], resume_text
-                    )
-                elif stage == 'cover':
-                    task = build_cover_task(
-                        agents['cover'], name, company, results['jd_analysis'], results['resume_analysis'], resume_text
-                    )
-                elif stage == 'interview':
-                    task = build_interview_task(
-                        agents['interview'], name, company, jd, results['jd_analysis'], results['resume_analysis'], resume_text
-                    )
+            pool = ThreadPoolExecutor(max_workers=min(len(jobs), PIPELINE_PARALLEL))
+            futures = {}
+            for key, (number, label, messages, opts) in jobs.items():
+                futures[pool.submit(lambda m=messages, o=opts: ke.clean_ai_output(llm_chat(m, **o)))] = key
+                yield sse({'type': 'agent_start', 'agent': number, 'label': label, 'step': 1, 'total': total})
 
-                yield f"data: {json.dumps({'type': 'agent_start', 'agent': agent_number, 'label': label, 'step': index, 'total': total})}\n\n"
-                output = kickoff_single(agents[stage], task)
+            failed = {}
+            finished = 1
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=10, return_when=FIRST_COMPLETED)
+                if not done:
+                    yield ': keepalive\n\n'      # keeps proxies from closing a quiet stream
+                    continue
+                for fut in done:
+                    key = futures[fut]
+                    number, label = jobs[key][0], jobs[key][1]
+                    try:
+                        results[key] = fut.result()
+                    except LLMError as exc:
+                        failed[key] = str(exc)
+                        continue
+                    except Exception:
+                        app.logger.exception('stage %s failed', key)
+                        failed[key] = 'Something went wrong.'
+                        continue
+                    finished += 1
+                    yield sse({'type': 'agent_done', 'agent': number, 'label': label, 'step': finished, 'total': total})
+                    yield sse({'type': 'partial', 'stage': key, 'text': results[key]})
 
-                if stage == 'jd':
-                    results['jd_analysis'] = output
-                elif stage == 'analysis':
-                    results['resume_analysis'] = output
-                elif stage == 'resume':
-                    results['rewritten_resume'] = output
-                elif stage == 'cover':
-                    results['cover_letter'] = output
-                elif stage == 'interview':
-                    results['interview_prep'] = output
+            if failed:
+                names = {'resume_analysis': 'resume analysis', 'rewritten_resume': 'rewritten resume',
+                         'cover_letter': 'cover letter', 'interview_prep': 'interview prep'}
+                what = ', '.join(names[k] for k in failed)
+                yield sse({'type': 'error', 'message':
+                           f'The AI service could not finish: {what}. Nothing was counted against your free kits. Please try again in a minute.'})
+                return
 
-                yield f"data: {json.dumps({'type': 'agent_done', 'agent': agent_number, 'label': label, 'step': index, 'total': total})}\n\n"
-
-            match_score, kw_count = parse_scores(results['resume_analysis'])
-            heatmap = build_heatmap(results['jd_analysis'], resume_text)
-            company_intel = get_company_intel(results['jd_analysis'])
             elapsed = round(time.time() - start)
             run_id = make_run_id(company)
-
-            payload = {
-                'type': 'complete',
-                'run_id': run_id,
-                'match_score': match_score,
-                'kw_count': kw_count,
-                'elapsed': elapsed,
-                'selected': selected,
-                'heatmap': heatmap,
-                'company_intel': company_intel,
-                **results,
-            }
             metadata = {
                 'run_id': run_id,
                 'user_id': user_id,
@@ -1671,18 +1378,42 @@ def run_pipeline():
                 'company': company,
                 'job_url': job_url,
                 'profile_id': profile_id,
-                'match_score': match_score,
-                'kw_count': kw_count,
+                'match_score': scoring['match_score'],
+                'kw_count': scoring['kw_found'],
+                'kw_total': scoring['kw_total'],
+                'coverage_pct': scoring['coverage_pct'],
                 'elapsed': elapsed,
                 'selected': selected,
-                'heatmap': heatmap,
+                'heatmap': heat,
                 'company_intel': company_intel,
             }
-            payload['saved_files'] = save_outputs(company, payload, metadata)
-            yield f"data: {json.dumps(payload)}\n\n"
+            saved_files = save_outputs(company, results, metadata)
+            yield sse({
+                'type': 'complete',
+                'run_id': run_id,
+                'match_score': scoring['match_score'],
+                'kw_count': scoring['kw_found'],
+                'kw_total': scoring['kw_total'],
+                'coverage_pct': scoring['coverage_pct'],
+                'elapsed': elapsed,
+                'selected': selected,
+                'heatmap': heat,
+                'company_intel': company_intel,
+                'warnings': warnings,
+                'saved_files': saved_files,
+                **results,
+            })
 
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        except LLMError as exc:
+            yield sse({'type': 'error', 'message': f'{exc} Nothing was counted against your free kits.'})
+        except GeneratorExit:
+            raise
+        except Exception:
+            app.logger.exception('run pipeline failed')
+            yield sse({'type': 'error', 'message': 'Something went wrong while building your kit. Nothing was counted against your free kits. Please try again.'})
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
 
     return Response(
         stream_with_context(generate()),
@@ -1715,25 +1446,23 @@ def download_run_file(run_id, file_key):
     user_id, error_resp, status = require_user()
     if error_resp:
         return error_resp, status
-    run_dir = get_run_dir(run_id)
-    if not run_dir:
-        return jsonify({'error': 'Run not found'}), 404
-
-    run = Run.query.filter_by(run_id=secure_filename(run_id), has_kit=True).first()
+    run = Run.query.filter_by(run_id=run_id, has_kit=True).first()
     if not run or run.user_id != user_id:
         return jsonify({'error': 'File not found'}), 404
-    metadata = run.to_metadata_dict()
-    saved_files = metadata.get('saved_files', {})
-    path = saved_files.get(file_key)
-    if not path:
+
+    texts = kit_texts_for_run(run)
+    try:
+        rendered = render_kit_file(file_key, texts)
+    except ImportError:
+        return jsonify({'error': 'This export format is not available on the server right now.'}), 503
+    except Exception:
+        app.logger.exception('export failed for %s/%s', run_id, file_key)
+        return jsonify({'error': 'Could not generate this file. Please try again.'}), 500
+    if not rendered:
         return jsonify({'error': 'File not found'}), 404
 
-    file_path = Path(path)
-    resolved_run_dir = run_dir.resolve()
-    if not file_path.exists() or resolved_run_dir not in file_path.resolve().parents:
-        return jsonify({'error': 'File not found'}), 404
-
-    return send_file(file_path, as_attachment=True, download_name=file_path.name)
+    data, mimetype, filename = rendered
+    return send_file(io.BytesIO(data), mimetype=mimetype, as_attachment=True, download_name=filename)
 
 
 @app.route('/profiles', methods=['GET'])
@@ -1934,8 +1663,9 @@ def analytics():
     tracker = read_tracker()
     count = len(runs)
 
-    avg_score = round(sum(item.get('match_score', 0) for item in runs) / count, 2) if count else 0
-    avg_keywords = round(sum(item.get('kw_count', 0) for item in runs) / count, 2) if count else 0
+    scored_runs = [item for item in runs if item.get('match_score') is not None]
+    avg_score = round(sum(item['match_score'] for item in scored_runs) / len(scored_runs), 2) if scored_runs else 0
+    avg_keywords = round(sum(item.get('kw_count', 0) or 0 for item in runs) / count, 2) if count else 0
     avg_time = round(sum(item.get('elapsed', 0) for item in runs) / count, 2) if count else 0
 
     statuses = {}
@@ -1976,7 +1706,7 @@ def dashboard_data():
     for run in reversed(runs[-12:]):
         score_series.append({
             'label': run.get('company', 'Run')[:14],
-            'score': run.get('match_score', 0),
+            'score': run.get('match_score') or 0,
         })
 
     status_counts = {}
@@ -1986,7 +1716,7 @@ def dashboard_data():
 
     base_widgets = [
         {'id': 'runs', 'title': 'Total Runs', 'value': len(runs), 'subtitle': 'Saved in your account'},
-        {'id': 'score', 'title': 'Latest Match Score', 'value': f"{latest.get('match_score', 0)}/10", 'subtitle': latest.get('company', 'No runs yet')},
+        {'id': 'score', 'title': 'Latest Match Score', 'value': (f"{latest.get('match_score')}/10" if latest.get('match_score') is not None else '—'), 'subtitle': latest.get('company', 'No runs yet')},
     ]
     role_widget_map = {
         'candidate': [
@@ -2195,17 +1925,20 @@ def autopilot_weekly_review():
     score_total = 0
     kw_total = 0
     count = len(runs)
+    scored_count = 0
     for run in runs:
-        score_total += float(run.get('match_score', 0) or 0)
+        if run.get('match_score') is not None:
+            score_total += float(run['match_score'])
+            scored_count += 1
         kw_total += float(run.get('kw_count', 0) or 0)
         status_key = tracker.get(run.get('run_id', ''), {}).get('status', run.get('application_status', 'Generated'))
         if status_key not in statuses:
             statuses[status_key] = 0
         statuses[status_key] += 1
 
-    avg_score = round(score_total / count, 2) if count else 0
+    avg_score = round(score_total / scored_count, 2) if scored_count else 0
     avg_kw = round(kw_total / count, 2) if count else 0
-    momentum = 'Rising' if avg_score >= 7 else 'Stable' if avg_score >= 5 else 'Needs Focus'
+    momentum = 'Not enough data yet' if not scored_count else ('Rising' if avg_score >= 7 else 'Stable' if avg_score >= 5 else 'Needs Focus')
 
     return jsonify({
         'runs_total': count,
@@ -2319,7 +2052,9 @@ def autopilot_queue_advance(item_id):
     if pro_error:
         return pro_error, pro_status
 
-    stages = ['Queued', 'In Progress', 'Kit Ready', 'Applied']
+    # Honest stage names: nothing here is automatic. 'Applied' only happens when YOU say so.
+    stages = ['Shortlisted', 'Preparing', 'Ready to apply', 'Applied']
+    legacy = {'Queued': 'Shortlisted', 'In Progress': 'Preparing', 'Kit Ready': 'Ready to apply'}
     store = read_auto_queue()
     items = store.get(str(user_id), [])
     if not isinstance(items, list):
@@ -2333,9 +2068,10 @@ def autopilot_queue_advance(item_id):
     if not target:
         return jsonify({'error': 'Queue item not found'}), 404
 
-    current = clean_text(target.get('status')) or 'Queued'
+    current = clean_text(target.get('status')) or 'Shortlisted'
+    current = legacy.get(current, current)
     if current not in stages:
-        current = 'Queued'
+        current = 'Shortlisted'
     next_idx = min(stages.index(current) + 1, len(stages) - 1)
     target['status'] = stages[next_idx]
     target['updated_at'] = datetime.now().isoformat(timespec='seconds')
@@ -2445,7 +2181,7 @@ def autopilot_run_daily():
             'title': item.get('title', ''),
             'source_url': item.get('source_url', ''),
             'score': item.get('score', 0),
-            'status': 'Kit Ready',
+            'status': 'Shortlisted',  # a kit has NOT been generated yet
             'updated_at': now,
         })
 
@@ -2458,7 +2194,7 @@ def autopilot_run_daily():
         'jobs_scanned': len(jobs),
         'go_count': len([x for x in ranked if x.get('verdict') == 'Go']),
         'top_ready': queue_items,
-        'message': 'Daily autopilot run complete. Review top jobs and approve to log applications.',
+        'message': 'Daily autopilot run complete. Review the shortlist, generate kits for the ones you like, and mark a job as applied only after you apply.',
     }
     return jsonify({'ranked': ranked, 'queue': queue_items, 'digest': digest})
 
@@ -2476,7 +2212,7 @@ def autopilot_digest_get():
     return jsonify({
         'date': datetime.now().strftime('%Y-%m-%d'),
         'items': top,
-        'summary': f"{len(top)} top jobs ready for approval",
+        'summary': f"{len(top)} shortlisted jobs to review",
     })
 
 
@@ -2514,7 +2250,7 @@ def autopilot_approve_item(item_id):
         'company': target.get('title', 'Autopilot Job'),
         'role': target.get('source_url', ''),
         'status': 'Applied',
-        'notes': 'Applied via Autopilot approval',
+        'notes': 'Marked as applied by you from the Autopilot shortlist',
         'updated_at': datetime.now().isoformat(timespec='seconds'),
     }
     write_tracker(tracker)
@@ -2525,12 +2261,39 @@ register_automation_routes(app, require_user, read_autopilot_config, write_job_f
 scheduler = start_scheduler(app.app_context)
 
 # ── ZERO TO RESUME BUILDER ─────────────────────────────
+FREE_MONTHLY_RESUME_BUILD_LIMIT = 3
+BUILD_RESUME_ID_RE = re.compile(r'^resume-build-(\d+)-(\d+)(?:-[0-9a-f]{8})?$')
+
+
+def resume_builds_this_month(user_id):
+    """Counts this user's built resumes from the output folders
+    (resume-build-<user>-<unix_time>[-token]). Stopgap until Phase 2 adds a
+    proper usage table; resets if the disk is wiped, which only ever favours the user."""
+    now = datetime.now()
+    start = datetime(now.year, now.month, 1).timestamp()
+    n = 0
+    for d in OUTPUT_DIR.glob(f"resume-build-{int(user_id)}-*"):
+        m = BUILD_RESUME_ID_RE.match(d.name)
+        if m and int(m.group(2)) >= start:
+            n += 1
+    return n
+
+
 @app.route('/build-resume', methods=['POST'])
-@limiter.limit("5 per minute; 30 per hour")
+@limiter.limit("3 per minute; 10 per hour; 20 per day")
 def build_resume_from_scratch():
     user_id, error_resp, status = require_user()
     if error_resp:
         return error_resp, status
+
+    # Same free-plan rule as kits: Free gets a small monthly allowance, Pro is unlimited.
+    if not is_pro_user(user_id):
+        used = resume_builds_this_month(user_id)
+        if used >= FREE_MONTHLY_RESUME_BUILD_LIMIT:
+            return jsonify({
+                'error': f'Free plan includes {FREE_MONTHLY_RESUME_BUILD_LIMIT} built resumes per month. Upgrade to Pro for unlimited.',
+                'upgrade_required': True,
+            }), 402
 
     data = request.get_json(silent=True) or {}
 
@@ -2615,58 +2378,37 @@ INSTRUCTIONS:
    - Professional Summary must reference the specific role from the JD
    - Format cleanly with clear section headers
 
-3. Output the resume in plain text format with clear sections.
-   Use ── as section dividers.
-   Make it ready to copy-paste directly.
+3. Output the resume in clean Markdown:
+   # Full Name
+   Contact line (email | phone | LinkedIn | GitHub)
+   ## Section headings, with "- " bullets under them.
+   No preamble, no closing remarks, no placeholders.
 
 Build the best possible resume for this candidate given their actual background."""
 
     try:
-        groq_key  = os.getenv('GROQ_API_KEY', '')
-        groq_model = os.getenv('GROQ_MODEL', 'groq/openai/gpt-oss-120b').replace('groq/', '')
+        resume_md = ke.clean_ai_output(llm_chat(
+            [
+                {'role': 'system', 'content': 'You are a professional resume writer. Never invent facts. Output only the resume in Markdown, no preamble or commentary.'},
+                {'role': 'user', 'content': prompt},
+            ],
+            temperature=0.4, max_tokens=2500, timeout=60,
+        ))
+        resume_text = ke.markdown_to_plain(resume_md)
 
-        import requests as req_lib
-        resp = req_lib.post(
-            'https://api.groq.com/openai/v1/chat/completions',
-            headers={
-                'Authorization': f'Bearer {groq_key}',
-                'Content-Type': 'application/json',
-            },
-            json={
-                'model': groq_model,
-                'messages': [
-                    {'role': 'system', 'content': 'You are a professional resume writer. Output only the resume, no preamble or commentary.'},
-                    {'role': 'user', 'content': prompt},
-                ],
-                'temperature': 0.4,
-                'max_tokens': 2500,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        resume_text = resp.json()['choices'][0]['message']['content']
-
-        # Save as a file
-        run_id = f"resume-build-{user_id}-{int(datetime.now().timestamp())}"
+        # Save as files (plain text + real DOCX made from the Markdown)
+        run_id = f"resume-build-{user_id}-{int(datetime.now().timestamp())}-{secrets.token_hex(4)}"
         out_dir = OUTPUT_DIR / run_id
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / 'built_resume.txt').write_text(resume_text, encoding='utf-8')
 
-        # Also generate DOCX if supported
         docx_path = None
-        if DOCX_SUPPORT:
-            try:
-                doc = Document()
-                doc.add_heading(name, 0)
-                for line in resume_text.split('\n'):
-                    if line.strip().startswith('──'):
-                        doc.add_paragraph('─' * 40)
-                    elif line.strip():
-                        doc.add_paragraph(line.strip())
-                docx_path = str(out_dir / 'built_resume.docx')
-                doc.save(docx_path)
-            except Exception:
-                docx_path = None
+        try:
+            (out_dir / 'built_resume.docx').write_bytes(ke.markdown_to_docx(resume_md, resume_style=True))
+            docx_path = str(out_dir / 'built_resume.docx')
+        except Exception:
+            app.logger.exception('built resume docx failed')
+            docx_path = None
 
         return jsonify({
             'ok': True,
@@ -2676,8 +2418,11 @@ Build the best possible resume for this candidate given their actual background.
             'message': f'Resume built successfully for {name}',
         })
 
-    except Exception as e:
-        return jsonify({'error': f'Resume generation failed: {str(e)}'}), 500
+    except LLMError as exc:
+        return jsonify({'error': str(exc)}), 503
+    except Exception:
+        app.logger.exception('build-resume failed')
+        return jsonify({'error': 'Resume generation failed. Please try again.'}), 500
 
 
 @app.route('/build-resume/download/<run_id>', methods=['GET'])
@@ -2685,6 +2430,11 @@ def download_built_resume(run_id):
     user_id, error_resp, status = require_user()
     if error_resp:
         return error_resp, status
+
+    # Owner check + strict id format (also blocks path tricks like ../).
+    m = BUILD_RESUME_ID_RE.match(run_id or '')
+    if not m or int(m.group(1)) != int(user_id):
+        return jsonify({'error': 'File not found'}), 404
 
     fmt = request.args.get('fmt', 'txt')
     out_dir = OUTPUT_DIR / run_id
@@ -2703,7 +2453,7 @@ def download_built_resume(run_id):
 
 # ── LINKEDIN POST GENERATOR ─────────────────────────────
 @app.route('/linkedin-post', methods=['POST'])
-@limiter.limit("10 per minute; 60 per hour")
+@limiter.limit("3 per minute; 15 per hour; 40 per day")
 def linkedin_post():
     user_id, error_resp, status = require_user()
     if error_resp:
@@ -2749,62 +2499,7 @@ Write only the post. No preamble, no explanation."""
 
 
 # ── SALARY ESTIMATOR ────────────────────────────────────
-@app.route('/salary-estimate', methods=['POST'])
-@limiter.limit("10 per minute; 60 per hour")
-def salary_estimate():
-    user_id, error_resp, status = require_user()
-    if error_resp:
-        return error_resp, status
-
-    data = request.get_json(silent=True) or {}
-    jd = safe_long_text(data.get('jd'), max_len=20000)
-    resume = safe_long_text(data.get('resume'), max_len=20000)
-    location = safe_str(data.get('location'), max_len=100, default='India') or 'India'
-    experience = safe_str(data.get('experience'), max_len=10, default='0') or '0'
-
-    if not jd:
-        return jsonify({'error': 'job description is required'}), 400
-
-    prompt = f"""You are a salary intelligence expert for the Indian tech job market.
-
-Job Description:
-{jd[:2000]}
-
-Candidate Resume Summary:
-{resume[:1000] if resume else 'Not provided — estimate based on JD requirements'}
-
-Location: {location}
-Years of Experience: {experience}
-
-Analyze and return a JSON object with exactly these fields:
-{{
-  "min_salary": <number in LPA for full-time, or monthly stipend in INR for internships>,
-  "max_salary": <number>,
-  "median_salary": <number>,
-  "currency": "LPA" or "INR/month",
-  "type": "full-time" or "internship",
-  "confidence": "high" or "medium" or "low",
-  "reasoning": "<2 sentences explaining the estimate>",
-  "negotiation_tip": "<one specific tip to negotiate higher>",
-  "market_demand": "high" or "medium" or "low",
-  "skill_premium": ["<skill that adds salary premium>", ...]
-}}
-
-Base your estimate on real 2024–2025 Indian market data. Return only the JSON object."""
-
-    try:
-        llm = get_llm(temperature=0.3)
-        raw = str(llm.call(prompt)).strip()
-        # Parse JSON from response
-        import json as _json
-        try:
-            result = _json.loads(raw)
-        except Exception:
-            m = re.search(r'\{[\s\S]+\}', raw)
-            result = _json.loads(m.group(0)) if m else {'error': 'Could not parse estimate'}
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+# (Salary estimator removed in Phase 0: it asked an LLM to invent salary numbers.)
 
 
 # ── BILLING / SUBSCRIPTION (Phase 3) ────────────────────
@@ -2922,26 +2617,53 @@ def billing_verify():
     if not payment_row:
         return jsonify({'error': 'No matching order found for this account.'}), 404
 
-    # Idempotency: if this exact payment_id was already processed (e.g. the
-    # frontend retried the verify call after a flaky network response),
-    # don't extend the plan a second time for one payment.
+    # Idempotency: if this exact payment_id belongs to a different order row,
+    # refuse it outright.
     already_processed = Payment.query.filter_by(razorpay_payment_id=payment_id).first()
     if already_processed and already_processed.id != payment_row.id:
         return jsonify({'error': 'This payment has already been recorded.'}), 409
 
+    granted = activate_pro_for_payment(payment_row.id, payment_id)
+    user_row = db.session.get(User, user_id)
+    return jsonify({
+        'ok': True,
+        'plan': 'pro',
+        'plan_expires_at': user_row.plan_expires_at if user_row else '',
+        # False when this payment was already processed (retry / webhook got
+        # there first) - Pro is NOT extended again in that case.
+        'newly_activated': granted,
+        'message': 'Welcome to ZeroToHire Pro!' if granted else 'Payment already confirmed - your Pro plan is active.',
+    })
+
+
+def activate_pro_for_payment(payment_row_id, payment_id):
+    """Grant 30 days of Pro for ONE payment, exactly once.
+
+    The claim is an atomic conditional UPDATE (status != 'paid'), so two
+    simultaneous calls (browser verify + Razorpay webhook, or a replayed
+    request) can never both extend the plan: only the caller whose UPDATE
+    changes a row gets to grant. Returns True if it granted, False if the
+    payment had already been processed."""
     now = datetime.now()
     period_end = now + timedelta(days=30)
+    claimed = Payment.query.filter(
+        Payment.id == payment_row_id,
+        Payment.status != 'paid',
+    ).update({
+        'status': 'paid',
+        'razorpay_payment_id': payment_id,
+        'plan_period_start': now.isoformat(timespec='seconds'),
+        'plan_period_end': period_end.isoformat(timespec='seconds'),
+    }, synchronize_session=False)
+    if not claimed:
+        db.session.rollback()
+        return False
 
-    payment_row.razorpay_payment_id = payment_id
-    payment_row.status = 'paid'
-    payment_row.plan_period_start = now.isoformat(timespec='seconds')
-    payment_row.plan_period_end = period_end.isoformat(timespec='seconds')
-
-    user_row = db.session.get(User, user_id)
+    row = db.session.get(Payment, payment_row_id)
+    user_row = db.session.get(User, row.user_id) if row else None
     if user_row:
         user_row.plan = 'pro'
-        # Stack onto an existing unexpired period instead of overwriting it,
-        # so paying early doesn't lose remaining days from a current plan.
+        # Stack onto an existing unexpired period so paying early doesn't lose days.
         current_expiry = None
         if user_row.plan_expires_at:
             try:
@@ -2950,33 +2672,62 @@ def billing_verify():
                 current_expiry = None
         base = current_expiry if (current_expiry and current_expiry > now) else now
         user_row.plan_expires_at = (base + timedelta(days=30)).isoformat(timespec='seconds')
-
     db.session.commit()
+    return True
 
-    return jsonify({
-        'ok': True,
-        'plan': 'pro',
-        'plan_expires_at': user_row.plan_expires_at if user_row else '',
-        'message': 'Welcome to ZeroToHire Pro!',
-    })
+
+@app.route('/billing/webhook', methods=['POST'])
+@limiter.exempt
+def billing_webhook():
+    """Razorpay -> server confirmation. Covers the case where the user pays
+    but closes the tab before the browser calls /billing/verify.
+
+    Setup: Razorpay Dashboard > Settings > Webhooks > add
+    https://<your-site>/billing/webhook , event `payment.captured`, and put
+    the secret you chose there into RAZORPAY_WEBHOOK_SECRET."""
+    secret = os.getenv('RAZORPAY_WEBHOOK_SECRET', '').strip()
+    if not secret:
+        return jsonify({'error': 'Webhook not configured'}), 503
+
+    raw_body = request.get_data(cache=True)
+    signature = request.headers.get('X-Razorpay-Signature', '')
+    try:
+        expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            raise ValueError('bad signature')
+    except Exception:
+        return jsonify({'error': 'Invalid signature'}), 400
+
+    event = request.get_json(silent=True) or {}
+    if event.get('event') not in ('payment.captured', 'order.paid'):
+        return jsonify({'ok': True, 'ignored': True})  # ack other events so Razorpay stops retrying
+
+    entity = (((event.get('payload') or {}).get('payment') or {}).get('entity')) or {}
+    payment_id = safe_str(entity.get('id'), max_len=120)
+    order_id = safe_str(entity.get('order_id'), max_len=120)
+    if not (payment_id and order_id):
+        return jsonify({'ok': True, 'ignored': True})
+
+    row = Payment.query.filter_by(razorpay_order_id=order_id).order_by(Payment.id.desc()).first()
+    if not row:
+        return jsonify({'ok': True, 'ignored': True})
+    # Amount must match what we asked for (paise), so a cheaper order can't unlock Pro.
+    if int(entity.get('amount') or 0) != int(row.amount_inr or 0) * 100:
+        return jsonify({'error': 'Amount mismatch'}), 400
+
+    other = Payment.query.filter_by(razorpay_payment_id=payment_id).first()
+    if other and other.id != row.id:
+        return jsonify({'ok': True, 'duplicate': True})
+
+    granted = activate_pro_for_payment(row.id, payment_id)
+    return jsonify({'ok': True, 'newly_activated': granted})
 
 
 # ── HEALTH CHECK ───────────────────────────────────────
 @app.route('/health', methods=['GET']) 
 def health():
-    otp_email_configured = bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER") and os.getenv("SMTP_PASSWORD"))
-    return jsonify({
-        'status': 'ok',
-        'pdf_support': PDF_SUPPORT, 
-        'docx_support': DOCX_SUPPORT,
-        'pdf_export_support': PDF_EXPORT_SUPPORT,
-        'url_fetch_support': URL_FETCH_SUPPORT,
-        'otp_email_configured': otp_email_configured,
-        'otp_phone_configured': False,
-        'google_oauth_configured': bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET")),
-        'model': os.getenv('GROQ_MODEL', 'groq/llama-3.3-70b-versatile'),
-        'outputs': str(OUTPUT_DIR),
-    })
+    # Public endpoint: say only "up". No paths, models or config flags.
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/terms', methods=['GET'])

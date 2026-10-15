@@ -1,18 +1,19 @@
-# AutoApply AI
+# ZeroToHire (AutoApply AI)
 
 AutoApply AI turns a job description and resume into a targeted application kit:
 
 - job description and ATS analysis
-- resume match score
+- honest keyword-match score (counted from the job description, never guessed)
 - rewritten resume
 - cover letter
 - interview prep kit
-- DOCX/PDF exports
+- real DOCX/PDF/TXT exports (generated on demand)
+- mock interview simulator (fixed number of questions, scored in code, final report)
 - saved run history
 - local candidate profiles
 - job URL import
 
-The app uses Flask, CrewAI, and Groq. The frontend is a single `index.html` file that streams progress from the Flask backend.
+The app uses Flask and Groq through one thin client (`llm_client.py`) with one default model. The frontend is a single `index.html` file that streams each result from the Flask backend as it finishes.
 
 ## Setup
 
@@ -42,18 +43,23 @@ Then open:
 
 ## How It Works
 
-The backend always runs the first two stages:
+1. **Resume intake** (`kit_engine.py`): PDF, DOCX or TXT is read and checked. A resume that is empty or too short is rejected with a clear message instead of producing a made-up kit.
+2. **JD Reader** runs first and extracts role, skills and keywords.
+3. **Keyword match** is computed in code: whole-word matching with synonyms. If the job description gives fewer than 5 usable keywords, no score is shown (no default 7/10).
+4. **Resume rewrite, cover letter and interview prep** run in parallel and each appears on screen as soon as it finishes. If any stage fails, nothing is saved and no quota is used.
+5. The kit text is stored in the database (`Run.kit_json`). DOCX/PDF/TXT files are built from it when you download, with model preambles stripped and markdown turned into real headings and bullets.
 
-1. JD Reader
-2. Resume Analyser
+## Code Map
 
-Then it runs only the outputs selected in the UI:
-
-3. Resume Rewriter
-4. Cover Letter Writer
-5. Interview Coach
-
-Each stage receives the previous stage output, so the agents now work as a real pipeline instead of isolated one-shot calls.
+| File | Job |
+|---|---|
+| `main.py` | Flask app, auth, billing, `/run` streaming pipeline, downloads |
+| `kit_engine.py` | Resume intake, keyword scoring, prompts, output cleaning, DOCX/PDF builders |
+| `llm_client.py` | The only place that talks to Groq (retries, JSON mode, safe errors) |
+| `interview_engine.py` | Interview rounds, prompts, strict reply validation, score and report maths |
+| `automation.py` | Job scraping, autopilot, interview routes |
+| `models.py` | SQLAlchemy models |
+| `tests/` | Test harness (AI is faked, no network needed) |
 
 ## Product Features
 
@@ -61,11 +67,11 @@ Each stage receives the previous stage output, so the agents now work as a real 
 - Import public job pages with the Job URL Import panel.
 - Review previous runs from the Run History panel.
 - Inspect the ATS keyword heatmap after each run.
-- Download TXT files in the browser, or DOCX/PDF files from the Flask backend.
+- Download TXT, DOCX or PDF for each part of a kit (made from the saved kit text).
 
 ## Output Files
 
-Each completed run is saved under `outputs/` in a timestamped folder with `metadata.json`, TXT outputs, and generated DOCX/PDF exports when the export libraries are installed.
+Kit text lives in the database, so it survives redeploys on hosts with a disk that resets. Files are generated on request; `outputs/` is only a local cache.
 
 ## Notes
 
@@ -81,7 +87,8 @@ The project is ready for single-service deployment (backend + frontend in one Fl
 ### Required environment variables
 
 - `GROQ_API_KEY`
-- `GROQ_MODEL` (optional, default already set in code)
+- `GROQ_MODEL` (optional, default `llama-3.3-70b-versatile`)
+- `DATABASE_URL` (Postgres in production; SQLite is used locally if empty)
 - `FRONTEND_ORIGIN` (use your deployed domain, or `*` if needed)
 - `SESSION_SECRET` (required for login sessions)
 - `SESSION_COOKIE_SECURE` (`true` in production over HTTPS)
@@ -101,7 +108,7 @@ The project is ready for single-service deployment (backend + frontend in one Fl
 
 ### Render / Railway style deploy
 
-This repo now includes [render.yaml](C:/Users/SARTHAK/OneDrive/AutoApplyAI/render.yaml) for Render blueprint deploy.
+This repo includes `render.yaml` for a Render blueprint deploy.
 
 1. Push this folder to GitHub.
 2. Create a new Web Service from the repo.
@@ -119,3 +126,17 @@ gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --threads 8 --timeout 180
 
 5. Add environment variables in the platform dashboard.
 6. Deploy and open the service URL.
+
+### Staying online and keeping data
+
+Render's free web service sleeps after about 15 minutes idle (first visit then takes ~30 seconds), and its free Postgres is deleted after 90 days. Before real users arrive, pick one:
+
+- **Cheapest that works:** keep the free Render web service, point `DATABASE_URL` at a free Neon or Supabase Postgres (no expiry), and ping `/health` every 5 minutes with a free uptime monitor.
+- **Simplest paid:** Render Starter web service plus Render Postgres paid plan (always on, no expiry).
+
+## Tests
+
+```bash
+pip install -r requirements.txt
+python tests/run_audit_tests.py
+```
