@@ -45,6 +45,9 @@ class User(db.Model):
     role = db.Column(db.String(50), default="candidate")
     password_hash = db.Column(db.String(255), default="")
     google_id = db.Column(db.String(255), default="")
+    # False = signed up with a password but never proved they own the email
+    # (set True on first successful email-OTP or Google login). NULL = legacy row.
+    email_verified = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.String(40), default=now_iso)
     # ── Subscription (Phase 3) ──────────────────────────────
     # plan: "free" or "pro". plan_expires_at: ISO date the current paid
@@ -63,6 +66,7 @@ class User(db.Model):
             "role": self.role or "candidate",
             "password_hash": self.password_hash or "",
             "google_id": self.google_id or "",
+            "email_verified": self.email_verified,
             "created_at": self.created_at,
             "plan": self.plan or "free",
             "plan_expires_at": self.plan_expires_at or "",
@@ -136,7 +140,11 @@ class Run(db.Model):
     status = db.Column(db.String(50), default="Generated")
     notes = db.Column(db.Text, default="")
     has_kit = db.Column(db.Boolean, default=False)  # True once save_outputs() has run
-    extra_json = db.Column(db.Text, default="{}")  # heatmap, selected, saved_files, kw stats
+    extra_json = db.Column(db.Text, default="{}")  # heatmap, selected, kw stats
+    # The generated texts (jd_analysis, resume_analysis, rewritten_resume,
+    # cover_letter, interview_prep) as JSON. Lives in the database so kits
+    # survive redeploys; DOCX/PDF files are generated on demand from it.
+    kit_json = db.Column(db.Text, default="")
     created_at = db.Column(db.String(40), default=now_iso)
     updated_at = db.Column(db.String(40), default=now_iso)
 
@@ -155,7 +163,7 @@ class Run(db.Model):
             "company": self.company or "",
             "job_url": self.role or "",
             "profile_id": self.profile_id or "default",
-            "match_score": self.match_score or 0,
+            "match_score": self.match_score,  # None = not scored (never a fake default)
             "kw_count": self.kw_count or 0,
             "elapsed": self.elapsed or 0,
             "application_status": self.status or "Generated",
@@ -270,6 +278,7 @@ class InterviewSession(db.Model):
     resume = db.Column(db.Text, default="")
     history_json = db.Column(db.Text, default="[]")
     scores_json = db.Column(db.Text, default="[]")
+    report_json = db.Column(db.Text, default="")  # final report once the interview is completed
     total_score = db.Column(db.Float, default=0)
     question_count = db.Column(db.Integer, default=0)
     status = db.Column(db.String(20), default="active")
@@ -288,6 +297,7 @@ class InterviewSession(db.Model):
             "resume": self.resume or "",
             "history": json.loads(self.history_json or "[]"),
             "scores": json.loads(self.scores_json or "[]"),
+            "report": json.loads(self.report_json) if self.report_json else None,
             "total_score": self.total_score or 0,
             "question_count": self.question_count or 0,
             "status": self.status,

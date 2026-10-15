@@ -1,6 +1,5 @@
 apscheduler
 beautifulsoup4
-crewai
 flask
 flask-cors
 flask-limiter

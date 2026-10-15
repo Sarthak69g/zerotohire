@@ -2,8 +2,8 @@
 #  ZeroToHire — Automation Stack v2.0
 #  Features:
 #   1. Job Scraper        (Internshala, Adzuna, RemoteOK, Instahyre, Shine)
-#   2. Telegram Bot       (approve jobs from phone)
-#   3. Cold Email Sender  (auto-email HR after kit generation)
+#   2. Cold Email Drafts  (draft only - user sends from their own inbox)
+#   3. (Telegram bot removed in Phase 0 - it could message any chat_id)
 #   4. Interview Simulator (real-time mock interview AI)
 #   5. Scheduled Daily Run (APScheduler every morning)
 # ============================================================
@@ -12,11 +12,10 @@ import json
 import logging
 import os
 import re
-import smtplib
+import secrets
 import threading
 import time
 from datetime import datetime
-from email.message import EmailMessage
 from pathlib import Path
 
 import requests
@@ -24,6 +23,8 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 from models import db, InterviewSession, ColdEmailLog, AutopilotConfig, JobFeedItem
+import interview_engine as ie
+from llm_client import LLMError, chat_json
 
 EMAIL_RE = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 
@@ -379,190 +380,120 @@ def run_job_scraper(roles: list[str], locations: list[str]) -> list[dict]:
 
 
 # ============================================================
-# 2. COLD EMAIL SENDER
+# 2. COLD EMAIL DRAFTS  (Phase 0: the server no longer sends email)
 # ============================================================
-
-def find_hr_email(company_name: str, job_url: str = "") -> str | None:
-    """Look for a real HR/careers email actually published on the job page.
-    Returns None if nothing real is found — we never guess an address anymore.
-    A guessed address (e.g. hr@company.com) is more likely to bounce or reach
-    the wrong inbox than to help, so it's not worth the risk."""
-    if job_url:
-        try:
-            resp = requests.get(job_url, headers=HEADERS, timeout=10)
-            emails = re.findall(
-                r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
-                resp.text
-            )
-            for email in emails:
-                if not any(x in email.lower() for x in ["noreply", "no-reply", "support", "info@"]):
-                    return email
-        except Exception:
-            pass
-    return None
-
+# Why: sending from one shared platform Gmail with a user-controlled display
+# name was spoofable, claimed an attachment that never existed, and the
+# job-URL fetch to look for an HR address was an SSRF hole. Users now get a
+# draft they send from their OWN inbox (mailto / copy).
 
 def build_cold_email_body(candidate_name: str, candidate_email: str, company: str, role: str, cover_letter_snippet: str = "") -> str:
-    snippet = cover_letter_snippet[:400] if cover_letter_snippet else (
-        f"I'm deeply interested in the {role} role at {company}. "
-        f"I believe my background in Python, AI, and web development makes me a strong fit."
-    )
+    snippet = (cover_letter_snippet or "").strip()[:600]
+    if not snippet:
+        snippet = f"[Add 1-2 lines on why you're a good fit for the {role} role - mention one real project or skill.]"
+    contact = f"{candidate_name}\n{candidate_email}".strip()
     return f"""Hi there,
 
 I came across the {role} opening at {company} and wanted to reach out directly.
 
 {snippet}
 
-I'd love the opportunity to discuss how I can contribute to your team. I've attached my resume and would be happy to share more details at your convenience.
+I'd love the opportunity to discuss how I can contribute to your team. [Attach your resume before sending.]
 
 Looking forward to hearing from you.
 
 Best regards,
-{candidate_name}
-{candidate_email}
+{contact}
 """
 
 
-def send_cold_email(
-    hr_email: str,
-    candidate_name: str,
-    candidate_email: str,
-    company: str,
-    role: str,
-    cover_letter_snippet: str = "",
-) -> tuple[bool, str]:
-    """Actually sends via SMTP. Only ever call this with a real, known-good
-    hr_email — either found on the job page or explicitly supplied by the
-    user. Never call this with a guessed address."""
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    smtp_from = os.getenv("SMTP_FROM", smtp_user or "")
-
-    if not (smtp_host and smtp_user and smtp_password):
-        return False, "SMTP not configured. Add SMTP_HOST, SMTP_USER, SMTP_PASSWORD to .env"
-
-    body = build_cold_email_body(candidate_name, candidate_email, company, role, cover_letter_snippet)
-
-    try:
-        msg = EmailMessage()
-        msg["Subject"] = f"Application: {role} — {candidate_name}"
-        msg["From"] = f"{candidate_name} <{smtp_from}>"
-        msg["To"] = hr_email
-        msg["Reply-To"] = candidate_email
-        msg.set_content(body)
-
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=12) as server:
-            server.starttls()
-            server.login(smtp_user, smtp_password)
-            server.send_message(msg)
-
-        db.session.add(ColdEmailLog(
-            to_email=hr_email,
-            company=company,
-            role=role,
-            candidate=candidate_name,
-            sent_at=datetime.now().isoformat(timespec="seconds"),
-            status="sent",
-        ))
-        db.session.commit()
-
-        log.info(f"Cold email sent to {hr_email} for {role} at {company}")
-        return True, f"Cold email sent to {hr_email}"
-
-    except Exception as e:
-        log.error(f"Cold email failed: {e}")
-        return False, str(e)
-
-
-def get_cold_email_log() -> list[dict]:
-    rows = ColdEmailLog.query.order_by(ColdEmailLog.id.desc()).all()
+def get_cold_email_log(user_id: int) -> list[dict]:
+    """Owner-scoped. Old rows saved before user_id existed are not shown."""
+    rows = ColdEmailLog.query.filter_by(user_id=user_id).order_by(ColdEmailLog.id.desc()).all()
     return [r.to_dict() for r in rows]
 
 
 # ============================================================
-# 3. INTERVIEW SIMULATOR — FIXED: No more *laughs* or stage directions
+# 3. INTERVIEW SIMULATOR  (Phase 1: fixed length, structured replies, real report)
+#    Prompts / parsing / scoring live in interview_engine.py.
 # ============================================================
 
-NO_STAGE_DIRECTIONS = (
-    "CRITICAL: Do NOT use action markers like *laughs*, *smiles*, *nods*, (pauses), (chuckles), "
-    "[leans forward], or ANY stage directions. Express your personality, warmth, and humor purely "
-    "through your WORDS. Never write text meant to describe actions rather than speech."
-)
-
-INTERVIEW_ROUNDS = {
-    "technical": {
-        "name": "Technical Round",
-        "system": (
-            "You are a sharp but chill senior developer interviewing a candidate. "
-            "Talk like a friendly senior who genuinely wants the candidate to succeed, but doesn't let weak answers slide. "
-            "Be conversational. React naturally to their answers, ask follow-ups based on what they said, and use light humor through words only. "
-            "But when they give a vague or wrong answer, push back naturally: 'Hmm, can you be more specific?' or 'That's a start, but what about...?' "
-            "Ask ONE focused technical question at a time based on the JD and their background. "
-            "After each answer respond naturally first, THEN give your score. "
-            "Format: [Natural conversational response]. SCORE: X/10 | FEEDBACK: [brief] | NEXT QUESTION: [question] "
-            f"{NO_STAGE_DIRECTIONS}"
-        ),
-        "opener": "Hey! Let's get into it. I'll ask you some technical questions based on the role. Keep it real, don't overthink. Ready when you are!",
-    },
-    "behavioral": {
-        "name": "Behavioral Round",
-        "system": (
-            "You are a chill but perceptive HR interviewer. Talk naturally like a person, not a robot. "
-            "React to what they say. If something is interesting, say so. If an answer is too generic, push back warmly. "
-            "Use STAR format guidance naturally in conversation. Ask ONE behavioral question at a time. "
-            "After each answer: [Natural reaction + brief encouragement or gentle pushback]. SCORE: X/10 | FEEDBACK: [brief] | NEXT QUESTION: [question] "
-            f"{NO_STAGE_DIRECTIONS}"
-        ),
-        "opener": "Hey, good to meet you! This is a pretty casual chat, just be yourself. I'll ask you some situational questions and we'll go from there. Sound good?",
-    },
-    "hr": {
-        "name": "HR Round",
-        "system": (
-            "You are a warm, friendly HR person who's also sharp and reads between the lines. "
-            "Make the candidate feel comfortable but ask the important stuff: salary expectations, motivation, culture fit, career goals. "
-            "Respond like a real person having a genuine conversation. If they say something interesting, follow up on it naturally. "
-            "After each answer: [Warm natural response]. SCORE: X/10 | FEEDBACK: [brief] | NEXT QUESTION: [question] "
-            f"{NO_STAGE_DIRECTIONS}"
-        ),
-        "opener": "Hi! Super glad you made it. This is just a chill conversation, no trick questions, I promise. Let's just get to know each other a bit. Tell me, what made you interested in this role?",
-    },
-    "rapid": {
-        "name": "Rapid Fire Round",
-        "system": (
-            "You are running a rapid-fire interview round. Keep it snappy and fun. "
-            "React briefly to each answer: 'Nice!', 'Hmm interesting take', 'I'd push back on that a little', etc. "
-            "Ask very short direct questions, expect 1-2 sentence answers. Keep the energy high. "
-            "Format: [1-line reaction]. SCORE: X/10 | NEXT: [next question] "
-            f"{NO_STAGE_DIRECTIONS}"
-        ),
-        "opener": "Alright, rapid fire! Short questions, short answers. Let's see how fast you think. No overthinking. Go!",
-    },
-}
+def _load_turns(row) -> list[dict]:
+    """Stored turns: [{n, question, answer|None, score, feedback, hint, reaction}].
+    Sessions saved before Phase 1 used a chat-message list; they have no turns."""
+    try:
+        data = json.loads(row.history_json or "[]")
+    except ValueError:
+        data = []
+    return [t for t in data if isinstance(t, dict) and "question" in t]
 
 
-def create_interview_session(
-    user_id: int,
-    round_type: str,
-    jd: str,
-    resume: str,
-    role: str,
-    company: str,
-) -> dict:
-    session_id = f"iv-{user_id}-{int(time.time())}"
-    config = INTERVIEW_ROUNDS.get(round_type, INTERVIEW_ROUNDS["technical"])
+def _call_json(messages, **kwargs) -> dict:
+    return chat_json(messages, **kwargs)
 
+
+def _ask_structured(build_messages, parse, attempts=2, **kwargs):
+    """Ask for JSON and validate it; retry once if the structure is wrong.
+    A reply that never validates becomes an LLMError, never a made-up value."""
+    last = None
+    for _ in range(attempts):
+        try:
+            return parse(_call_json(build_messages(), **kwargs))
+        except ie.InterviewFormatError as exc:
+            last = exc
+            log.warning("Interview reply had the wrong structure: %s", exc)
+    raise LLMError("The interviewer gave an unreadable reply. Please try again.")
+
+
+def _session_view(row) -> dict:
+    """What the browser may see about a session (never the JD/resume text)."""
+    turns = _load_turns(row)
+    scores = json.loads(row.scores_json or "[]")
+    pending = next((t for t in turns if t.get("answer") is None), None)
+    avg = ie.average(scores)
+    return {
+        "session_id": row.session_id,
+        "round_type": row.round_type,
+        "round_name": row.round_name,
+        "role": row.role,
+        "company": row.company,
+        "status": row.status,
+        "total_questions": ie.total_questions(row.round_type),
+        "answered": len(scores),
+        "average_score": avg,
+        "grade": ie.grade_for(avg),
+        "scores": scores,
+        "pending_question": pending["question"] if (pending and row.status == "active") else None,
+        "question_number": pending["n"] if (pending and row.status == "active") else None,
+        "turns": [
+            {"n": t["n"], "question": t["question"], "answer": t.get("answer"), "score": t.get("score"),
+             "feedback": t.get("feedback", ""), "hint": t.get("hint", "")}
+            for t in turns if t.get("answer") is not None
+        ],
+        "report": json.loads(row.report_json) if row.report_json else None,
+    }
+
+
+def create_interview_session(user_id: int, round_type: str, jd: str, resume: str, role: str, company: str) -> dict:
+    cfg = ie.round_config(round_type)
+    round_type = round_type if round_type in ie.ROUNDS else ie.DEFAULT_ROUND
+    role = role or ie.guess_role(jd)
+    # Ask the AI for question 1 BEFORE saving anything: a failed start leaves no junk session.
+    question = _ask_structured(
+        lambda: ie.first_question_messages(round_type, role, company, jd, resume),
+        ie.parse_question, temperature=0.6, max_tokens=300, timeout=40,
+    )
+    turns = [{"n": 1, "question": question, "answer": None}]
     row = InterviewSession(
-        session_id=session_id,
+        session_id=f"iv-{user_id}-{int(time.time())}-{secrets.token_hex(6)}",
         user_id=user_id,
         round_type=round_type,
-        round_name=config["name"],
-        role=role,
-        company=company,
-        jd=jd[:2000],
-        resume=resume[:2000],
-        history_json="[]",
+        round_name=cfg["name"],
+        role=role[:300],
+        company=company[:300],
+        jd=jd[:6000],
+        resume=resume[:6000],
+        history_json=json.dumps(turns),
         scores_json="[]",
         total_score=0,
         question_count=0,
@@ -571,118 +502,112 @@ def create_interview_session(
     )
     db.session.add(row)
     db.session.commit()
-    log.info(f"Interview session created: {session_id}")
-    return row.to_dict()
+    log.info("Interview session created: %s", row.session_id)
+    view = _session_view(row)
+    view["intro"] = cfg["intro"]
+    return view
 
 
-def get_interview_session(session_id: str) -> dict | None:
-    row = InterviewSession.query.filter_by(session_id=session_id).first()
-    return row.to_dict() if row else None
+def get_interview_session(session_id: str, user_id: int) -> dict | None:
+    """Owner-scoped: someone else's session looks exactly like a missing one."""
+    row = InterviewSession.query.filter_by(session_id=session_id, user_id=user_id).first()
+    return _session_view(row) if row else None
 
 
-def answer_interview_question(
-    session_id: str,
-    user_answer: str,
-    groq_api_key: str,
-    groq_model: str = "openai/gpt-oss-120b",
-) -> dict:
-    row = InterviewSession.query.filter_by(session_id=session_id).first()
+def _finalize(row, turns) -> dict:
+    """Build + store the final report. The AI writes the wording (best effort);
+    numbers always come from the stored scores."""
+    narrative = None
+    try:
+        narrative = _call_json(ie.report_messages(row.round_type, row.role, row.company, turns),
+                               temperature=0.3, max_tokens=700, timeout=40)
+    except LLMError as exc:
+        log.warning("Interview report narrative failed (using built-in wording): %s", exc)
+    report = ie.build_report(turns, narrative)
+    row.report_json = json.dumps(report)
+    return report
+
+
+def answer_interview_question(session_id: str, user_id: int, user_answer: str, expected_n: int | None = None) -> dict:
+    row = InterviewSession.query.filter_by(session_id=session_id, user_id=user_id).first()
     if not row:
-        return {"error": "Session not found"}
-    session = row.to_dict()
+        return {"error": "Session not found", "code": "not_found"}
+    if row.status != "active":
+        return {"error": "This interview is already finished. Start a new one.", "code": "finished"}
 
-    config = INTERVIEW_ROUNDS.get(session["round_type"], INTERVIEW_ROUNDS["technical"])
+    turns = _load_turns(row)
+    pending = turns[-1] if turns and turns[-1].get("answer") is None else None
+    if not pending:
+        return {"error": "This session has no open question. Start a new interview.", "code": "finished"}
+    if expected_n is not None and expected_n != pending["n"]:
+        # a double-click or a stale tab: tell the browser where we really are
+        return {"error": "That answer was for a different question.", "code": "out_of_sync",
+                "question_number": pending["n"], "question": pending["question"]}
 
-    system_prompt = (
-        f"{config['system']}\n\n"
-        f"Role: {session['role']} at {session['company']}\n"
-        f"JD Summary: {session['jd'][:800]}\n"
-        f"Candidate Background: {session['resume'][:800]}"
+    total = ie.total_questions(row.round_type)
+    is_last = pending["n"] >= total
+    answered_before = row.question_count or 0
+
+    evaluation = _ask_structured(
+        lambda: ie.answer_messages(row.round_type, row.role, row.company, row.jd, row.resume, turns, user_answer, is_last),
+        lambda data: ie.parse_evaluation(data, user_answer, is_last),
+        temperature=0.4, max_tokens=700, timeout=45,
     )
 
-    messages = [{"role": "system", "content": system_prompt}]
+    # The AI call is slow: make sure nothing else answered this question meanwhile.
+    db.session.refresh(row)
+    if (row.question_count or 0) != answered_before or row.status != "active":
+        return {"error": "That answer was for a different question.", "code": "out_of_sync"}
 
-    for msg in session["history"]:
-        messages.append(msg)
+    pending.update(answer=user_answer, score=evaluation["score"], feedback=evaluation["feedback"],
+                   hint=evaluation["hint"], reaction=evaluation["reaction"])
+    scores = json.loads(row.scores_json or "[]") + [evaluation["score"]]
+    if not is_last:
+        turns.append({"n": pending["n"] + 1, "question": evaluation["next_question"], "answer": None})
 
-    if not session["history"]:
-        messages.append({"role": "assistant", "content": config["opener"]})
-
-    messages.append({"role": "user", "content": user_answer})
-
-    try:
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {groq_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": groq_model,
-                "messages": messages,
-                "temperature": 0.6,
-                "max_tokens": 600,
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        ai_reply = resp.json()["choices"][0]["message"]["content"]
-
-        score_match = re.search(r"SCORE:\s*(\d+)\s*/\s*10", ai_reply, re.IGNORECASE)
-        score = int(score_match.group(1)) if score_match else 7
-
-        session["history"].append({"role": "user", "content": user_answer})
-        session["history"].append({"role": "assistant", "content": ai_reply})
-        session["scores"].append(score)
-        session["question_count"] += 1
-        session["total_score"] = round(sum(session["scores"]) / len(session["scores"]), 1)
-
-        if session["question_count"] >= 5:
-            session["status"] = "completed"
-
-        row.history_json = json.dumps(session["history"])
-        row.scores_json = json.dumps(session["scores"])
-        row.question_count = session["question_count"]
-        row.total_score = session["total_score"]
-        row.status = session["status"]
-        db.session.commit()
-
-        return {
-            "ai_reply": ai_reply,
-            "score": score,
-            "total_score": session["total_score"],
-            "question_count": session["question_count"],
-            "status": session["status"],
-            "session_id": session_id,
-        }
-
-    except Exception as e:
-        log.error(f"Interview AI error: {e}")
-        return {"error": str(e)}
-
-
-def get_interview_summary(session_id: str) -> dict:
-    session = get_interview_session(session_id)
-    if not session:
-        return {"error": "Session not found"}
-
-    scores = session.get("scores", [])
-    avg = round(sum(scores) / len(scores), 1) if scores else 0
-
-    grade = "Excellent" if avg >= 8 else "Good" if avg >= 6 else "Needs Work" if avg >= 4 else "Practice More"
+    row.history_json = json.dumps(turns)
+    row.scores_json = json.dumps(scores)
+    row.question_count = len(scores)
+    row.total_score = ie.average(scores) or 0
+    report = None
+    if is_last:
+        row.status = "completed"
+        report = _finalize(row, turns)
+    db.session.commit()
 
     return {
+        "reaction": evaluation["reaction"],
+        "score": evaluation["score"],
+        "feedback": evaluation["feedback"],
+        "model_answer_hint": evaluation["hint"],
+        "next_question": evaluation["next_question"] or None,
+        "question_number": None if is_last else pending["n"] + 1,
+        "answered": len(scores),
+        "total_questions": total,
+        "average_score": row.total_score,
+        "status": row.status,
+        "report": report,
         "session_id": session_id,
-        "round_name": session.get("round_name"),
-        "role": session.get("role"),
-        "company": session.get("company"),
-        "total_questions": session.get("question_count", 0),
-        "average_score": avg,
-        "grade": grade,
-        "scores": scores,
-        "status": session.get("status"),
-        "history": session.get("history", []),
     }
+
+
+def finish_interview(session_id: str, user_id: int) -> dict:
+    """End early. Keeps every answer given so far and writes a report from them."""
+    row = InterviewSession.query.filter_by(session_id=session_id, user_id=user_id).first()
+    if not row:
+        return {"error": "Session not found", "code": "not_found"}
+    if row.status == "active":
+        row.status = "ended"
+        turns = _load_turns(row)
+        if any(t.get("answer") is not None for t in turns):
+            _finalize(row, turns)
+        db.session.commit()
+    return _session_view(row)
+
+
+def get_interview_summary(session_id: str, user_id: int) -> dict:
+    view = get_interview_session(session_id, user_id)
+    return view or {"error": "Session not found"}
 
 
 def list_user_interview_sessions(user_id: int) -> list[dict]:
@@ -698,6 +623,8 @@ def list_user_interview_sessions(user_id: int) -> list[dict]:
             "role": r.role,
             "company": r.company,
             "total_score": r.total_score or 0,
+            "answered": r.question_count or 0,
+            "total_questions": ie.total_questions(r.round_type),
             "status": r.status,
             "created_at": r.created_at,
         }
@@ -705,91 +632,38 @@ def list_user_interview_sessions(user_id: int) -> list[dict]:
     ]
 
 
-# ============================================================
-# 4. TELEGRAM BOT
-# ============================================================
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-
-
-def tg_send(text: str, chat_id: str = "") -> bool:
-    token = TELEGRAM_TOKEN
-    cid = chat_id or TELEGRAM_CHAT_ID
-    if not token or not cid:
-        log.warning("Telegram not configured. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to .env")
-        return False
-    try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": cid, "text": text, "parse_mode": "Markdown"},
-            timeout=10,
-        )
-        return resp.status_code == 200
-    except Exception as e:
-        log.error(f"Telegram send error: {e}")
-        return False
-
-
-def tg_send_job_digest(jobs: list[dict], chat_id: str = "") -> bool:
-    if not jobs:
-        return tg_send("No top jobs today. Try updating your roles/locations.", chat_id)
-
-    lines = ["*ZeroToHire Daily Digest*", f"{datetime.now().strftime('%d %b %Y')}", ""]
-    for i, job in enumerate(jobs[:5], 1):
-        score = job.get("score", 0)
-        verdict = job.get("verdict", "Go")
-        emoji = "✅" if verdict == "Go" else "🟡" if verdict == "Maybe" else "❌"
-        lines.append(
-            f"{emoji} *{i}. {job.get('title', 'Job')}*\n"
-            f"   {job.get('company', 'Company')} | {job.get('location', 'Remote')}\n"
-            f"   Match: {score}% | Source: {job.get('source', 'Web')}\n"
-            f"   {job.get('source_url', '')}\n"
-        )
-
-    lines.append("_Reply with job number to approve_")
-    return tg_send("\n".join(lines), chat_id)
-
-
-def tg_notify_kit_ready(job_title: str, company: str, run_id: str, chat_id: str = "") -> bool:
-    msg = (
-        f"*Kit Ready!*\n\n"
-        f"*Role:* {job_title}\n"
-        f"*Company:* {company}\n"
-        f"*Run ID:* `{run_id}`\n\n"
-        f"Your resume, cover letter, and interview prep are ready."
-    )
-    return tg_send(msg, chat_id)
-
-
-def tg_notify_cold_email_sent(hr_email: str, company: str, role: str, chat_id: str = "") -> bool:
-    msg = (
-        f"*Cold Email Sent!*\n\n"
-        f"*Role:* {role}\n"
-        f"*Company:* {company}\n"
-        f"*To:* {hr_email}\n\n"
-        f"Your application email has been delivered."
-    )
-    return tg_send(msg, chat_id)
-
-
-def get_telegram_updates(offset: int = 0) -> list[dict]:
-    if not TELEGRAM_TOKEN:
-        return []
-    try:
-        resp = requests.get(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-            params={"offset": offset, "timeout": 5},
-            timeout=10,
-        )
-        return resp.json().get("result", [])
-    except Exception:
-        return []
+def merge_scraped_jobs(user_id: int, jobs: list[dict], origin: str = "scraped") -> int:
+    """Save scraped jobs WITHOUT touching what the user saved by hand.
+    Only previous scraped/autopilot rows are replaced; manual items stay.
+    Needs an app context. Returns number of rows added."""
+    JobFeedItem.query.filter(
+        JobFeedItem.user_id == user_id,
+        JobFeedItem.origin.in_(["scraped", "autopilot"]),
+    ).delete(synchronize_session=False)
+    kept = {r.source_url for r in JobFeedItem.query.filter_by(user_id=user_id).all()}
+    now = datetime.now().isoformat(timespec="seconds")
+    added = 0
+    for job in jobs:
+        url = (job.get("source_url") or "")[:1000]
+        if not url or url in kept:
+            continue  # unique (user, url); a URL-less job can't be opened anyway
+        kept.add(url)
+        db.session.add(JobFeedItem(
+            user_id=user_id, source_url=url,
+            title=(job.get("title") or "")[:500], text=job.get("text", ""),
+            origin=origin, saved_at=now, updated_at=now,
+        ))
+        added += 1
+    db.session.commit()
+    return added
 
 
 # ============================================================
 # 5. SCHEDULER (APScheduler)
 # ============================================================
+
+_scheduler_lock_fh = None
+
 
 def start_scheduler(app_context_fn=None):
     try:
@@ -800,7 +674,21 @@ def start_scheduler(app_context_fn=None):
         log.warning("Scheduler will not run.")
         return None
 
-    scheduler = BackgroundScheduler()
+    # gunicorn runs several workers and each imports this module. Without a
+    # guard every worker starts its own scheduler and the daily run executes
+    # N times. An exclusive file lock lets exactly one worker own it.
+    global _scheduler_lock_fh
+    try:
+        import fcntl, tempfile
+        _scheduler_lock_fh = open(os.path.join(tempfile.gettempdir(), "zerotohire_scheduler.lock"), "w")
+        fcntl.flock(_scheduler_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except ImportError:
+        pass  # Windows local dev: single process anyway
+    except OSError:
+        log.info("Scheduler already running in another worker; skipping.")
+        return None
+
+    scheduler = BackgroundScheduler(timezone=os.getenv("SCHEDULER_TZ", "Asia/Kolkata"))
 
     def _run_daily_job_body():
         for cfg_row in AutopilotConfig.query.filter_by(enabled=True).all():
@@ -815,24 +703,7 @@ def start_scheduler(app_context_fn=None):
             log.info(f"Running scraper for user {user_id}: {roles}")
             jobs = run_job_scraper(roles, locations)
 
-            JobFeedItem.query.filter_by(user_id=user_id).delete()
-            now = datetime.now().isoformat(timespec="seconds")
-            for job in jobs:
-                db.session.add(JobFeedItem(
-                    user_id=user_id,
-                    source_url=job.get("source_url", ""),
-                    title=job.get("title", ""),
-                    text=job.get("text", ""),
-                    origin="autopilot",
-                    saved_at=now,
-                    updated_at=now,
-                ))
-            db.session.commit()
-
-            top_jobs = jobs[:5]
-            chat_id = cfg.get("telegram_chat_id") or TELEGRAM_CHAT_ID
-            if chat_id:
-                tg_send_job_digest(top_jobs, chat_id)
+            merge_scraped_jobs(user_id, jobs, origin="autopilot")
 
             log.info(f"Daily run complete for user {user_id}: {len(jobs)} jobs found")
 
@@ -858,7 +729,7 @@ def start_scheduler(app_context_fn=None):
     )
 
     scheduler.start()
-    log.info("Scheduler started — daily job run at 8:00 AM")
+    log.info("Scheduler started — daily job run at 8:00 AM (%s)", os.getenv("SCHEDULER_TZ", "Asia/Kolkata"))
     return scheduler
 
 
@@ -885,6 +756,7 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
         return decorator
 
     @app.route("/automation/scrape", methods=["POST"])
+    @_maybe_limit("5 per hour; 15 per day")
     def automation_scrape():
         user_id, error_resp, status = require_user_fn()
         if error_resp:
@@ -901,7 +773,7 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
 
         def scrape_and_respond():
             jobs = run_job_scraper(roles, locations)
-            write_job_feed_fn({str(user_id): jobs})
+            merge_scraped_jobs(user_id, jobs, origin="scraped")
             return jobs
 
         result = {"jobs": [], "error": None}
@@ -934,63 +806,49 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
         })
 
     @app.route("/automation/cold-email", methods=["POST"])
+    @_maybe_limit("20 per hour")
     def automation_cold_email():
+        """Returns a DRAFT only. The user sends it from their own inbox."""
         user_id, error_resp, status = require_user_fn()
         if error_resp:
             return error_resp, status
-        pro_error, pro_status = _require_pro(user_id)
-        if pro_error:
-            return pro_error, pro_status
 
         data = request.get_json(silent=True) or {}
         company = _safe_str(data.get("company"), max_len=200)
         role = _safe_str(data.get("role"), max_len=200)
-        job_url = _safe_str(data.get("job_url"), max_len=2048)
-        candidate_name = _safe_str(data.get("candidate_name", "Candidate"), max_len=150, default="Candidate") or "Candidate"
+        candidate_name = _safe_str(data.get("candidate_name", ""), max_len=150) or ""
         candidate_email = _safe_str(data.get("candidate_email"), max_len=255)
         cover_snippet = _safe_long_text(data.get("cover_snippet"), max_len=3000)
-        hr_email_override = _safe_str(data.get("hr_email"), max_len=255)
+        hr_email = _safe_str(data.get("hr_email"), max_len=255)
 
         if not company or not role:
             return jsonify({"error": "company and role are required"}), 400
         if candidate_email and not _is_valid_email(candidate_email):
             return jsonify({"error": "candidate_email looks invalid"}), 400
-        if hr_email_override and not _is_valid_email(hr_email_override):
-            return jsonify({"error": "hr_email override looks invalid"}), 400
+        if hr_email and not _is_valid_email(hr_email):
+            return jsonify({"error": "hr_email looks invalid"}), 400
 
-        hr_email = hr_email_override or find_hr_email(company, job_url)
-
-        if not hr_email:
-            # No real, verified email — hand back a draft instead of guessing
-            # an address and sending blind. The user reviews and sends it
-            # themselves from their own inbox.
-            draft_body = build_cold_email_body(candidate_name, candidate_email, company, role, cover_snippet)
-            return jsonify({
-                "ok": False,
-                "mode": "draft_only",
-                "message": "No verified HR email found for this company. Here's a ready-to-send draft — copy it into your own email client.",
-                "draft": {
-                    "subject": f"Application: {role} — {candidate_name}",
-                    "body": draft_body,
-                },
-            })
-
-        ok, msg = send_cold_email(hr_email, candidate_name, candidate_email, company, role, cover_snippet)
-
-        if ok:
-            chat_id = read_autopilot_config_fn().get(str(user_id), {}).get("telegram_chat_id", "")
-            tg_notify_cold_email_sent(hr_email, company, role, chat_id)
-
-        return jsonify({"ok": ok, "mode": "sent", "message": msg, "hr_email": hr_email})
+        body = build_cold_email_body(candidate_name, candidate_email, company, role, cover_snippet)
+        return jsonify({
+            "ok": True,
+            "mode": "draft_only",
+            "message": "Draft ready. Review it, attach your resume and send it from your own email.",
+            "to": hr_email,
+            "draft": {
+                "subject": f"Application: {role}" + (f" - {candidate_name}" if candidate_name else ""),
+                "body": body,
+            },
+        })
 
     @app.route("/automation/cold-email/log", methods=["GET"])
     def automation_cold_email_log():
         user_id, error_resp, status = require_user_fn()
         if error_resp:
             return error_resp, status
-        return jsonify({"log": get_cold_email_log()})
+        return jsonify({"log": get_cold_email_log(user_id)})
 
     @app.route("/automation/interview/start", methods=["POST"])
+    @_maybe_limit("10 per hour; 30 per day")
     def automation_interview_start():
         user_id, error_resp, status = require_user_fn()
         if error_resp:
@@ -1003,21 +861,20 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
         round_type = _safe_str(data.get("round_type", "technical"), max_len=30, default="technical")
         jd = _safe_long_text(data.get("jd"), max_len=20000)
         resume = _safe_long_text(data.get("resume"), max_len=20000)
-        role = _safe_str(data.get("role", "Software Developer"), max_len=150, default="Software Developer") or "Software Developer"
-        company = _safe_str(data.get("company", "Company"), max_len=200, default="Company") or "Company"
+        role = _safe_str(data.get("role"), max_len=150)
+        company = _safe_str(data.get("company", "the company"), max_len=200, default="the company") or "the company"
 
-        if round_type not in INTERVIEW_ROUNDS:
-            return jsonify({"error": f"round_type must be one of: {list(INTERVIEW_ROUNDS.keys())}"}), 400
+        if round_type not in ie.ROUNDS:
+            return jsonify({"error": f"round_type must be one of: {list(ie.ROUNDS.keys())}"}), 400
+        if len(jd.strip()) < 30:
+            return jsonify({"error": "Paste the job description first (at least a few lines) so the questions match the role."}), 400
 
-        session_obj = create_interview_session(user_id, round_type, jd, resume, role, company)
-        config = INTERVIEW_ROUNDS[round_type]
-
-        return jsonify({
-            "session_id": session_obj["session_id"],
-            "round_name": config["name"],
-            "opener": config["opener"],
-            "rounds_available": list(INTERVIEW_ROUNDS.keys()),
-        })
+        try:
+            view = create_interview_session(user_id, round_type, jd, resume, role, company)
+        except LLMError as exc:
+            return jsonify({"error": str(exc)}), 502
+        view["rounds_available"] = list(ie.ROUNDS.keys())
+        return jsonify(view)
 
     @app.route("/automation/interview/answer", methods=["POST"])
     @_maybe_limit("20 per minute; 100 per hour")
@@ -1031,15 +888,26 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
 
         data = request.get_json(silent=True) or {}
         session_id = _safe_str(data.get("session_id"), max_len=120)
-        user_answer = _safe_long_text(data.get("answer"), max_len=5000)
+        user_answer = _safe_long_text(data.get("answer"), max_len=5000).strip()
+        try:
+            expected_n = int(data.get("question_number")) if data.get("question_number") is not None else None
+        except (TypeError, ValueError):
+            expected_n = None
 
         if not session_id or not user_answer:
             return jsonify({"error": "session_id and answer are required"}), 400
 
-        groq_key = os.getenv("GROQ_API_KEY", "")
-        groq_model = os.getenv("GROQ_MODEL", "groq/openai/gpt-oss-120b").replace("groq/", "")
-
-        result = answer_interview_question(session_id, user_answer, groq_key, groq_model)
+        try:
+            result = answer_interview_question(session_id, user_id, user_answer, expected_n)
+        except LLMError as exc:
+            return jsonify({"error": str(exc)}), 502
+        code = result.get("code")
+        if code == "not_found":
+            return jsonify(result), 404
+        if code == "out_of_sync":
+            return jsonify(result), 409
+        if result.get("error"):
+            return jsonify(result), 400
         return jsonify(result)
 
     @app.route("/automation/interview/summary/<session_id>", methods=["GET"])
@@ -1047,7 +915,22 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
         user_id, error_resp, status = require_user_fn()
         if error_resp:
             return error_resp, status
-        return jsonify(get_interview_summary(session_id))
+        result = get_interview_summary(session_id, user_id)
+        if result.get("error"):
+            return jsonify(result), 404
+        return jsonify(result)
+
+    @app.route("/automation/interview/finish", methods=["POST"])
+    @_maybe_limit("20 per hour")
+    def automation_interview_finish():
+        user_id, error_resp, status = require_user_fn()
+        if error_resp:
+            return error_resp, status
+        data = request.get_json(silent=True) or {}
+        result = finish_interview(_safe_str(data.get("session_id"), max_len=120), user_id)
+        if result.get("error"):
+            return jsonify(result), 404
+        return jsonify(result)
 
     @app.route("/automation/interview/sessions", methods=["GET"])
     def automation_interview_sessions():
@@ -1056,51 +939,16 @@ def register_automation_routes(app, require_user_fn, read_autopilot_config_fn, w
             return error_resp, status
         return jsonify({"sessions": list_user_interview_sessions(user_id)})
 
-    @app.route("/automation/telegram/send", methods=["POST"])
-    def automation_telegram_send():
-        user_id, error_resp, status = require_user_fn()
-        if error_resp:
-            return error_resp, status
-        pro_error, pro_status = _require_pro(user_id)
-        if pro_error:
-            return pro_error, pro_status
-
-        data = request.get_json(silent=True) or {}
-        text = data.get("text", "")
-        chat_id = data.get("chat_id", "")
-
-        if not text:
-            return jsonify({"error": "text is required"}), 400
-
-        ok = tg_send(text, chat_id)
-        return jsonify({"ok": ok})
-
-    @app.route("/automation/telegram/digest", methods=["POST"])
-    def automation_telegram_digest():
-        user_id, error_resp, status = require_user_fn()
-        if error_resp:
-            return error_resp, status
-        pro_error, pro_status = _require_pro(user_id)
-        if pro_error:
-            return pro_error, pro_status
-
-        data = request.get_json(silent=True) or {}
-        chat_id = data.get("chat_id", "")
-        rows = JobFeedItem.query.filter_by(user_id=user_id).order_by(JobFeedItem.updated_at.desc()).limit(5).all()
-        jobs = [r.to_dict() for r in rows]
-
-        ok = tg_send_job_digest(jobs, chat_id)
-        return jsonify({"ok": ok, "jobs_sent": len(jobs)})
-
     @app.route("/automation/status", methods=["GET"])
     def automation_status():
+        user_id, error_resp, status = require_user_fn()
+        if error_resp:
+            return error_resp, status
         return jsonify({
             "scraper": True,
-            "cold_email": bool(os.getenv("SMTP_HOST") and os.getenv("SMTP_USER")),
-            "telegram": bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID),
+            "cold_email": "draft_only",
             "interview_simulator": bool(os.getenv("GROQ_API_KEY")),
             "scheduler": True,
-            "email_log_count": len(get_cold_email_log()),
         })
 
     log.info("Automation routes registered")

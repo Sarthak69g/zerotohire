@@ -1559,6 +1559,15 @@
       position: relative;
     }
 
+    .out-body .md-h1 { font-weight: 700; font-size: 1.3em; margin: 0 0 4px; }
+    .out-body .md-h2 { font-weight: 700; margin: 14px 0 4px; padding-bottom: 2px; border-bottom: 1px solid rgba(0,0,0,.18); }
+    .out-body .md-h3 { font-weight: 700; margin: 10px 0 2px; }
+    .out-body .md-p { margin: 3px 0; }
+    .out-body .md-li { padding-left: 1.2em; text-indent: -0.9em; margin: 1px 0; }
+    .out-body .md-li:before { content: '\2022\00a0'; }
+    .out-body .md-num { padding-left: 1.5em; text-indent: -1.5em; margin: 3px 0; }
+    .out-body a { color: inherit; text-decoration: underline; }
+
     .out-body.active {
       display: block;
       animation: fadeIn 0.3s ease;
@@ -5557,12 +5566,12 @@
   <div class="doodle-zone page" id="page-home" data-page="home">
   <section class="doodle-hero">
     <h1>Let's find you a job, <span class="highlight">one doodle at a time.</span></h1>
-    <p>Five AI agents, real internships, and zero boring spreadsheets. Just paste a JD and go.</p>
+    <p>Five AI steps, real internships, and zero boring spreadsheets. Just paste a JD and go.</p>
     <button class="doodle-cta" onclick="routeTo('/build')">✏️ Run the Agents</button>
   </section>
   <div class="doodle-divider"></div>
 
-  <div class="section-label doodle-label"><span class="label-num">🤖</span><span class="label-title">The Five Agents</span><span class="label-meta">CrewAI + Groq · LLaMA 3.3 70B</span></div>
+  <div class="section-label doodle-label"><span class="label-num">🤖</span><span class="label-title">The Five Agents</span><span class="label-meta">Groq · LLaMA 3.3 70B</span></div>
   <div class="pipeline-section">
     <div class="pipeline-heading">
       <h2>THE <em>FIVE</em><br>AGENTS</h2>
@@ -5580,8 +5589,7 @@
         <div class="agent-num">02 / 05</div>
         <div class="agent-icon">📊</div>
         <div class="agent-name">Analyser</div>
-        <div class="agent-desc">Scores your resume against the JD out of 10. Identifies exact skill gaps and what's
-          missing.</div>
+        <div class="agent-desc">Checks which job keywords your resume covers and shows the exact skill gaps. Only counted keywords, no guessed scores.</div>
         <div class="agent-tag">Score + Gaps</div>
       </div>
       <div class="agent-card" onclick="routeTo('/build')" role="button" tabindex="0" onkeydown="if(event.key==='Enter')routeTo('/build')">
@@ -5613,7 +5621,7 @@
   </div><!-- /.doodle-zone (Home) -->
 
   <div class="doodle-zone page" id="page-jobfeed" data-page="jobfeed">
-  <div class="section-label doodle-label"><span class="label-num">01</span><span class="label-title">Job Feed</span><span class="label-meta">7 Sources · Auto-Scraped · AI Scored</span></div>
+  <div class="section-label doodle-label"><span class="label-num">01</span><span class="label-title">Job Feed</span><span class="label-meta">5 Sources · Auto-Scraped · Keyword Matched</span></div>
   <div class="job-feed-section">
     <div class="job-feed-toolbar">
       <input type="text" id="feedRolesInput" placeholder="Roles: Python Developer, AI Intern..." />
@@ -5709,7 +5717,7 @@
         <div class="ztr-group">
           <div class="ztr-group-label">Skills & Certifications</div>
           <div class="ztr-field"><label>Technical Skills (comma separated)</label><input type="text" id="ztrSkills"
-              placeholder="Python, Flask, SQL, React, Git, AWS, CrewAI" /></div>
+              placeholder="Python, Flask, SQL, React, Git, AWS" /></div>
           <div class="ztr-field"><label>Certifications</label><input type="text" id="ztrCerts"
               placeholder="Google Analytics, AWS Cloud Practitioner, Anthropic AI Fluency" /></div>
         </div>
@@ -5791,6 +5799,13 @@
     <div class="input-grid">
       <div class="input-left">
         <div class="input-block">
+          <label>Job URL <span>Optional · or paste the description below</span></label>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <input type="text" id="jobUrlInput" placeholder="https://company.com/careers/backend-intern" style="flex:1;" />
+            <button class="mini-btn" type="button" onclick="importJobUrl()">Import</button>
+          </div>
+        </div>
+        <div class="input-block">
           <label>Job Description <span>Required</span></label>
           <textarea id="jdInput"
             placeholder="Paste the full job description here...&#10;&#10;Include everything — responsibilities, requirements, nice-to-haves, company description."></textarea>
@@ -5816,8 +5831,8 @@
           <div class="upload-block" id="dropZone">
             <div class="upload-icon-ring">📄</div>
             <p id="uploadLabel"><strong>Drop resume here</strong></p>
-            <p>TXT or PDF · Click to browse</p>
-            <input type="file" id="resumeFile" accept=".txt,.pdf" onchange="handleFile(this)" />
+            <p>PDF, DOCX or TXT · Click to browse</p>
+            <input type="file" id="resumeFile" accept=".txt,.pdf,.docx" onchange="handleFile(this)" />
           </div>
         </div>
         <div class="opts-block">
@@ -5922,14 +5937,14 @@
     <div class="score-bar-row">
       <div class="score-block">
         <div class="s-val" id="sMatch">—</div>
-        <div class="s-label">Match Score / 10</div>
+        <div class="s-label">Keyword Match / 10</div>
         <div class="s-bar">
           <div class="s-bar-fill" id="sMatchBar" style="width:0%"></div>
         </div>
       </div>
       <div class="score-block">
         <div class="s-val" id="sKw">—</div>
-        <div class="s-label">ATS Keywords Found</div>
+        <div class="s-label">Job Keywords in Your Resume</div>
         <div class="s-bar">
           <div class="s-bar-fill" id="sKwBar" style="width:0%"></div>
         </div>
@@ -6191,7 +6206,7 @@
           <div class="iv-idle">
             <div class="iv-idle-icon">🎯</div>
             <div>Select a round type and click Start Interview.</div>
-            <div style="font-size:10px;margin-top:4px;">Uses your last run's JD + resume automatically.</div>
+            <div style="font-size:10px;margin-top:4px;">Uses the job description and resume currently in the Run Kit form.</div>
           </div>
         </div>
         <div class="iv-chat-input" id="ivChatInput" style="display:none;">
@@ -6252,7 +6267,7 @@
   </div>
 
 
-  <div class="section-label doodle-label"><span class="label-num">11</span><span class="label-title">AI Tools</span><span class="label-meta">LinkedIn Post Generator · Salary Estimator</span></div>
+  <div class="section-label doodle-label"><span class="label-num">11</span><span class="label-title">AI Tools</span><span class="label-meta">LinkedIn Post Generator</span></div>
   <div class="tools-section">
     <div class="tools-grid">
 
@@ -6264,7 +6279,7 @@
         </div>
         <div class="tool-field">
           <label>Your Project / Achievement</label>
-          <textarea id="liPostInput" placeholder="Describe what you built. E.g: I built ZeroToHire — an AI that generates job application kits in 60 seconds using CrewAI, Flask, Groq. It has interview simulator, job scraper, voice AI..."></textarea>
+          <textarea id="liPostInput" placeholder="Describe what you built. E.g: I built ZeroToHire — an AI that generates job application kits in 60 seconds using Flask and Groq. It has interview simulator, job scraper, voice AI..."></textarea>
         </div>
         <div class="tool-field">
           <label>Tone</label>
@@ -6279,34 +6294,6 @@
         <button class="tool-copy-btn" id="liCopyBtn" style="display:none;" onclick="copyLinkedInPost()">📋 Copy Post</button>
       </div>
 
-      <!-- Salary Estimator -->
-      <div class="tool-card">
-        <div class="tool-card-header">
-          <div class="tool-card-title">💰 Salary Estimator</div>
-          <div class="tool-card-sub">Know your market value before you negotiate</div>
-        </div>
-        <div class="tool-field">
-          <label>Job Description</label>
-          <textarea id="salJD" placeholder="Paste the job description here..."></textarea>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-          <div class="tool-field">
-            <label>Location</label>
-            <input type="text" id="salLocation" placeholder="Delhi, Bangalore..." value="Delhi" />
-          </div>
-          <div class="tool-field">
-            <label>Years of Experience</label>
-            <input type="text" id="salExp" placeholder="0, 1, 2..." value="0" />
-          </div>
-        </div>
-        <button class="tool-btn" onclick="estimateSalary()">📊 Estimate Salary</button>
-        <div class="salary-result" id="salResult">
-          <div class="sal-card"><div class="sal-label">Min</div><div class="sal-val" id="salMin">—</div></div>
-          <div class="sal-card"><div class="sal-label">Expected</div><div class="sal-val" id="salMed">—</div></div>
-          <div class="sal-card"><div class="sal-label">Max</div><div class="sal-val" id="salMax">—</div></div>
-          <div class="sal-reasoning" id="salReasoning"></div>
-        </div>
-      </div>
 
     </div>
   </div>
@@ -6363,7 +6350,7 @@
   <div class="doodle-zone" id="siteFooter">
   <footer>
     <div class="footer-logo">Zero<span>ToHire</span></div>
-    <div class="footer-meta">Built by Sarthak · CrewAI + Groq · LLaMA 3.3 70B<br>IITM Janakpuri · BCA 4th Sem · 2026
+    <div class="footer-meta">Built by Sarthak · Flask + Groq · LLaMA 3.3 70B<br>IITM Janakpuri · BCA 4th Sem · 2026
       <br><a href="/terms" target="_blank" style="color:var(--text-muted);text-decoration:none;">Terms</a>
       &nbsp;·&nbsp;
       <a href="/privacy" target="_blank" style="color:var(--text-muted);text-decoration:none;">Privacy</a>
@@ -6377,7 +6364,8 @@
   <div class="cold-email-modal-overlay" id="coldEmailModalOverlay" onclick="closeColdEmailModal(event)">
     <div class="cold-email-modal">
       <button class="close-modal" onclick="closeColdEmailModalDirect()">×</button>
-      <h3>📧 Send Cold Email</h3>
+      <h3>📧 Draft Cold Email</h3>
+      <p style="font-size:12px;margin:0 0 10px;opacity:.8;">We write the draft. You review it, attach your resume and send it from your own email.</p>
       <div class="mini-field">
         <label>Company</label>
         <input type="text" id="ceCompany" placeholder="Acme Corp" />
@@ -6386,12 +6374,9 @@
         <label>Role / Position</label>
         <input type="text" id="ceRole" placeholder="Python Developer Intern" />
       </div>
+      <input type="hidden" id="ceJobUrl" />
       <div class="mini-field">
-        <label>Job URL (optional — helps find HR email)</label>
-        <input type="text" id="ceJobUrl" placeholder="https://linkedin.com/jobs/..." />
-      </div>
-      <div class="mini-field">
-        <label>HR Email (leave blank to auto-detect)</label>
+        <label>HR / recruiter email (optional — only if you have it)</label>
         <input type="text" id="ceHrEmail" placeholder="hr@company.com" />
       </div>
       <div class="mini-field">
@@ -6407,8 +6392,17 @@
         <textarea id="ceCoverSnippet" rows="3" placeholder="I built X using Y and I'd love to bring that to your team..."></textarea>
       </div>
       <div class="cold-email-status" id="coldEmailStatus"></div>
+      <div class="mini-field" id="ceDraftBox" style="display:none;">
+        <label>Your draft (edit freely)</label>
+        <input type="text" id="ceDraftSubject" />
+        <textarea id="ceDraftBody" rows="9"></textarea>
+        <div class="modal-actions" style="margin-top:8px;">
+          <button class="mini-btn" onclick="copyColdEmailDraft()">📋 Copy</button>
+          <button class="mini-btn primary" onclick="openColdEmailInMailApp()">✉️ Open in my email app</button>
+        </div>
+      </div>
       <div class="modal-actions">
-        <button class="mini-btn primary" onclick="sendColdEmail()">Send Email</button>
+        <button class="mini-btn primary" onclick="sendColdEmail()">Create Draft</button>
         <button class="mini-btn" onclick="closeColdEmailModalDirect()">Cancel</button>
       </div>
     </div>
@@ -6427,10 +6421,9 @@
       <ul class="upgrade-features">
         <li>Unlimited application kits every month</li>
         <li>Weekly Coach — momentum, avg score, and status mix across every run</li>
-        <li>Daily Digest — top-ranked jobs delivered automatically</li>
-        <li>Cold email outreach to real HR contacts</li>
+        <li>Daily Digest — your top keyword-matched jobs, ready when you open the app</li>
+        <li>Cold email drafts you can send from your own inbox</li>
         <li>Full mock interview simulator, all rounds</li>
-        <li>Telegram job-approval bot</li>
       </ul>
       <button class="mini-btn" id="upgradeCheckoutBtn" onclick="startUpgradeCheckout()">Upgrade Now — Pay with Razorpay</button>
       <div class="upgrade-status" id="upgradeStatus"></div>
@@ -6440,6 +6433,22 @@
 
   <script>
     const BACKEND = window.location.origin.startsWith('http') ? window.location.origin : 'http://127.0.0.1:5000';
+
+    // ── SAFE RENDERING HELPERS (Phase 0) ─────────────────────
+    // Anything that came from a scraper, the AI or another person MUST go
+    // through esc() before it is put into innerHTML.
+    function esc(v) {
+      return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    // For values inside inline handlers: onclick="fn(${jsArg(value)})"
+    function jsArg(v) { return esc(JSON.stringify(String(v == null ? '' : v))); }
+    // Only http(s) links are ever allowed (blocks javascript: / data: URLs).
+    function safeUrl(u) {
+      try {
+        const x = new URL(String(u || ''), window.location.href);
+        return (x.protocol === 'http:' || x.protocol === 'https:') ? x.href : '';
+      } catch (e) { return ''; }
+    }
     const selectedOutputs = { resume: true, cover: true, interview: true, ats: true };
     let profiles = [];
     let latestRunId = '';
@@ -6865,7 +6874,7 @@
         const data = await apiJson('/profiles');
         profiles = data.profiles || [];
         const select = document.getElementById('profileSelect');
-        select.innerHTML = '<option value="">No saved profile</option>' + profiles.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+        select.innerHTML = '<option value="">No saved profile</option>' + profiles.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
       } catch (err) {
         showToast('Start Flask to load profiles');
       }
@@ -6917,48 +6926,6 @@
       }
     }
 
-    async function importBulkJobs() {
-      const raw = document.getElementById('bulkJobUrls').value || '';
-      const urls = raw.split('\n').map(line => line.trim()).filter(Boolean);
-      if (!urls.length) {
-        showToast('Paste at least one URL');
-        return;
-      }
-      const list = document.getElementById('bulkResultsList');
-      list.innerHTML = '<div class="bulk-item">Importing job pages...</div>';
-      try {
-        const data = await apiJson('/fetch-jobs-bulk', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls }),
-        });
-
-        if ((data.jobs || []).length) {
-          importedJobs = data.jobs || [];
-          await apiJson('/job-feed', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobs: importedJobs.map(j => ({ ...j, origin: 'bulk_import' })) }),
-          });
-          const first = data.jobs[0];
-          document.getElementById('jobUrlInput').value = first.source_url || first.url || '';
-          document.getElementById('jdInput').value = `${first.title || 'Imported Job'}\n${first.source_url || first.url || ''}\n\n${first.text || ''}`;
-        }
-
-        const okRows = (data.jobs || []).map((job, idx) =>
-          `<div class="bulk-item"><strong>${idx + 1}. ${job.title || 'Untitled Job'}</strong><div class="kanban-meta">${job.source_url || job.url}</div></div>`
-        );
-        const errRows = (data.errors || []).map((err) =>
-          `<div class="bulk-item">Failed: ${err.url}<div class="kanban-meta">${err.error}</div></div>`
-        );
-        list.innerHTML = [...okRows, ...errRows].join('') || '<div class="bulk-item">No jobs imported</div>';
-        showToast(`Bulk import complete: ${data.success}/${data.requested}`);
-      } catch (err) {
-        list.innerHTML = `<div class="bulk-item">Import failed: ${err.message}</div>`;
-        showError(err.message);
-      }
-    }
-
     async function syncAutopilotJobsFromFeed() {
       // NOTE: this used to be named loadJobFeed() too — a second, unrelated
       // function further down the file (the Job Feed grid renderer) shared
@@ -6976,10 +6943,6 @@
             text: j.text || '',
             source_url: j.source_url || '',
           }));
-          const list = document.getElementById('bulkResultsList');
-          list.innerHTML = jobs.slice(0, 12).map((job, idx) =>
-            `<div class="bulk-item"><strong>${idx + 1}. ${job.title || 'Untitled Job'}</strong><div class="kanban-meta">${job.source_url || ''}</div></div>`
-          ).join('');
         }
       } catch { }
     }
@@ -6987,7 +6950,7 @@
     async function runAutopilotPlan() {
       const list = document.getElementById('autopilotList');
       if (!importedJobs.length) {
-        list.innerHTML = '<div class="auto-item">Import job URLs first using Bulk Import.</div>';
+        list.innerHTML = '<div class="auto-item">Scrape or refresh jobs on the Jobs page first, then run the plan.</div>';
         return;
       }
       list.innerHTML = '<div class="auto-item">Building autopilot plan...</div>';
@@ -7004,12 +6967,12 @@
         renderAutopilotList();
 
         const ac = data.action_center || {};
-        const focus = (ac.this_week_focus || []).map(k => `• ${k}`).join('<br>') || '• No gaps detected';
-        const acts = (ac.next_actions || []).map(x => `• ${x}`).join('<br>');
+        const focus = (ac.this_week_focus || []).map(k => `• ${esc(k)}`).join('<br>') || '• No gaps detected';
+        const acts = (ac.next_actions || []).map(x => `• ${esc(x)}`).join('<br>');
         document.getElementById('actionCenter').innerHTML = `<strong>Focus Keywords</strong><br>${focus}<br><br><strong>Next Actions</strong><br>${acts}`;
         showToast(`Autopilot ready: Go ${data.summary?.go || 0}, Maybe ${data.summary?.maybe || 0}, Skip ${data.summary?.skip || 0}`);
       } catch (err) {
-        list.innerHTML = `<div class="auto-item">Autopilot failed: ${err.message}</div>`;
+        list.innerHTML = `<div class="auto-item">Autopilot failed: ${esc(err.message)}</div>`;
       }
     }
 
@@ -7041,10 +7004,10 @@
       list.innerHTML = items.map((job, idx) => {
         const cls = (job.verdict || '').toLowerCase();
         return `<div class="auto-item">
-      <strong>${idx + 1}. ${job.title || 'Untitled Role'}</strong>
-      <div><span class="badge ${cls}">${job.verdict}</span><span class="badge">Score ${job.score}%</span></div>
-      <div class="kanban-meta">${job.priority_reason || ''}</div>
-      <div class="kanban-meta">Missing: ${(job.missing_keywords || []).slice(0, 4).join(', ') || '-'}</div>
+      <strong>${idx + 1}. ${esc(job.title || 'Untitled Role')}</strong>
+      <div><span class="badge ${esc(cls)}">${esc(job.verdict)}</span><span class="badge">Keyword overlap ${esc(job.score)}%</span></div>
+      <div class="kanban-meta">${esc(job.priority_reason || '')}</div>
+      <div class="kanban-meta">Missing: ${esc((job.missing_keywords || []).slice(0, 4).join(', ') || '-')}</div>
     </div>`;
       }).join('') || '<div class="auto-item">No jobs in this filter yet.</div>';
     }
@@ -7076,7 +7039,7 @@
         renderTopGoQueue();
         showToast(`Top-Go queue ready (${saved.count || data.count})`);
       } catch (err) {
-        list.innerHTML = `<div class="auto-item">Queue failed: ${err.message}</div>`;
+        list.innerHTML = `<div class="auto-item">Queue failed: ${esc(err.message)}</div>`;
       }
     }
 
@@ -7124,7 +7087,7 @@
         topGoQueue = data.queue || [];
         renderTopGoQueue();
         const digest = data.digest || {};
-        document.getElementById('autopilotDigest').innerHTML = `<strong>${digest.date || ''}</strong><br>Scanned: ${digest.jobs_scanned || 0}<br>Go Jobs: ${digest.go_count || 0}<br>${digest.message || ''}`;
+        document.getElementById('autopilotDigest').innerHTML = `<strong>${esc(digest.date || '')}</strong><br>Scanned: ${esc(digest.jobs_scanned || 0)}<br>Go Jobs: ${esc(digest.go_count || 0)}<br>${esc(digest.message || '')}`;
         showToast(`Autopilot daily run complete (${topGoQueue.length} ready)`);
       } catch (err) {
         showError(err.message);
@@ -7134,8 +7097,8 @@
     async function loadAutopilotDigest() {
       try {
         const data = await apiJson('/autopilot/digest');
-        const rows = (data.items || []).map((item) => `• ${item.title} (${item.score}%)`).join('<br>');
-        document.getElementById('autopilotDigest').innerHTML = `<strong>${data.date || ''}</strong><br>${data.summary || ''}<br><br>${rows || 'No items.'}`;
+        const rows = (data.items || []).map((item) => `• ${esc(item.title)} (${esc(item.score)}%)`).join('<br>');
+        document.getElementById('autopilotDigest').innerHTML = `<strong>${esc(data.date || '')}</strong><br>${esc(data.summary || '')}<br><br>${rows || 'No items.'}`;
       } catch (err) {
         renderProGate('autopilotDigest', err, 'Daily Digest');
       }
@@ -7159,12 +7122,12 @@
       }
       list.innerHTML = topGoQueue.map((item) => `
     <div class="auto-item">
-      <strong>${item.position}. ${item.title}</strong>
-      <div class="kanban-meta">Score: ${item.score}%</div>
-      <div class="kanban-meta">Status: ${item.status}</div>
+      <strong>${esc(item.position)}. ${esc(item.title)}</strong>
+      <div class="kanban-meta">Keyword overlap: ${esc(item.score)}%</div>
+      <div class="kanban-meta">Stage: ${esc(item.status)}</div>
       <div class="mini-actions" style="margin-top:8px;">
-        <button class="mini-btn" onclick="advanceQueueItem('${item.id}')">Advance Stage</button>
-        <button class="mini-btn primary" onclick="approveQueueItem('${item.id}')">Approve</button>
+        <button class="mini-btn" onclick="advanceQueueItem(${jsArg(item.id)})">Next stage</button>
+        <button class="mini-btn primary" onclick="approveQueueItem(${jsArg(item.id)})">I applied ✓</button>
       </div>
     </div>
   `).join('');
@@ -7182,9 +7145,10 @@
     }
 
     async function approveQueueItem(itemId) {
+      if (!confirm('Mark this job as applied? Only do this after you have really applied. ZeroToHire does not apply for you.')) return;
       try {
         const data = await apiJson(`/autopilot/approve/${encodeURIComponent(itemId)}`, { method: 'POST' });
-        showToast(`Approved and logged (${data.tracker_run_id || 'done'})`);
+        showToast('Marked as applied in your tracker');
         await loadTopGoQueue();
         await loadKanban();
         await loadHistory();
@@ -7197,10 +7161,10 @@
       try {
         const data = await apiJson('/autopilot/weekly-review');
         const status = data.status_breakdown || {};
-        const breakdown = Object.entries(status).filter(([, v]) => Number(v) > 0).map(([k, v]) => `• ${k}: ${v}`).join('<br>');
-        const notes = (data.coach_notes || []).map(x => `• ${x}`).join('<br>');
+        const breakdown = Object.entries(status).filter(([, v]) => Number(v) > 0).map(([k, v]) => `• ${esc(k)}: ${esc(v)}`).join('<br>');
+        const notes = (data.coach_notes || []).map(x => `• ${esc(x)}`).join('<br>');
         document.getElementById('weeklyReview').innerHTML =
-          `<strong>Momentum:</strong> ${data.momentum}<br><strong>Avg Score:</strong> ${data.avg_score}<br><strong>Avg Keywords:</strong> ${data.avg_keywords}<br><br><strong>Status Mix</strong><br>${breakdown || '• No tracked runs yet'}<br><br><strong>Coach Notes</strong><br>${notes}`;
+          `<strong>Momentum:</strong> ${esc(data.momentum)}<br><strong>Avg Score:</strong> ${esc(data.avg_score)}<br><strong>Avg Keywords:</strong> ${esc(data.avg_keywords)}<br><br><strong>Status Mix</strong><br>${breakdown || '• No tracked runs yet'}<br><br><strong>Coach Notes</strong><br>${notes}`;
       } catch (err) {
         renderProGate('weeklyReview', err, 'Weekly Review');
       }
@@ -7228,9 +7192,9 @@
           return;
         }
         list.innerHTML = runs.slice(0, 8).map(run => `
-      <div class="history-item" onclick="openHistoryRun('${run.run_id}')">
-        <div class="history-top"><span>${run.company || 'Company'}</span><span>${run.match_score || '- '}/10</span></div>
-        <div class="history-meta">${run.created_at || ''} · ${run.elapsed || '-'}s · ${run.name || 'Candidate'} · ${run.application_status || 'Generated'}</div>
+      <div class="history-item" onclick="openHistoryRun(${jsArg(run.run_id)})">
+        <div class="history-top"><span>${esc(run.company || 'Company')}</span><span>${typeof run.match_score === 'number' ? esc(run.match_score) + '/10' : '—'}</span></div>
+        <div class="history-meta">${esc(run.created_at || '')} · ${esc(run.elapsed || '-')}s · ${esc(run.name || 'Candidate')} · ${esc(run.application_status || 'Generated')}</div>
       </div>
     `).join('');
         renderHistoryPage();
@@ -7262,10 +7226,10 @@
         if (!col) return;
         const items = trackerItems.filter((item) => (item.status || 'Generated') === status);
         col.innerHTML = items.map((item) => `
-      <div class="kanban-card" draggable="true" data-run-id="${item.run_id}">
-        <strong>${item.company || 'Company'}</strong>
-        <div class="kanban-meta">${item.run_id}</div>
-        <div class="kanban-meta">${item.role || '-'}</div>
+      <div class="kanban-card" draggable="true" data-run-id="${esc(item.run_id)}">
+        <strong>${esc(item.company || 'Company')}</strong>
+        <div class="kanban-meta">${esc(item.run_id)}</div>
+        <div class="kanban-meta">${esc(item.role || '-')}</div>
       </div>
     `).join('');
       });
@@ -7330,29 +7294,31 @@
 
       body.innerHTML = rows.slice(0, 50).map((run) => `
     <tr>
-      <td><strong>${run.run_id || '-'}</strong></td>
-      <td>${run.company || '-'}</td>
-      <td>${run.name || 'Candidate'}</td>
-      <td>${run.match_score || 0}/10</td>
-      <td>${run.application_status || 'Generated'}</td>
-      <td>${run.created_at || '-'}</td>
-      <td><button class="mini-btn" onclick="openHistoryRun('${run.run_id}')">Open</button></td>
+      <td><strong>${esc(run.run_id || '-')}</strong></td>
+      <td>${esc(run.company || '-')}</td>
+      <td>${esc(run.name || 'Candidate')}</td>
+      <td>${typeof run.match_score === 'number' ? esc(run.match_score) + '/10' : '—'}</td>
+      <td>${esc(run.application_status || 'Generated')}</td>
+      <td>${esc(run.created_at || '-')}</td>
+      <td><button class="mini-btn" onclick="openHistoryRun(${jsArg(run.run_id)})">Open</button></td>
     </tr>
   `).join('');
     }
 
     function renderDashboard() {
-      const grid = document.getElementById('dashboardGrid');
+      const grid = document.getElementById('dashCardsGrid');
+      if (!grid) return;
       const payload = dashboardPayload || {};
       const runs = cachedRuns || [];
       const statusCounts = payload.status_counts || {};
       const applicationsSent = (statusCounts.Applied || 0) + (statusCounts.Interview || 0) + (statusCounts.Offer || 0) + (statusCounts.Rejected || 0);
       const interviews = statusCounts.Interview || 0;
       const offers = statusCounts.Offer || 0;
-      const avgScore = runs.length ? Math.round((runs.reduce((sum, r) => sum + Number(r.match_score || 0), 0) / runs.length) * 10) : 0;
+      const scoredRuns = runs.filter(r => typeof r.match_score === 'number');
+      const avgScore = scoredRuns.length ? Math.round((scoredRuns.reduce((sum, r) => sum + r.match_score, 0) / scoredRuns.length) * 10) : null;
       const cards = [
         { title: 'Applications Sent', value: applicationsSent, subtitle: 'Tracked from queue + tracker', icon: '📋' },
-        { title: 'Match Rate', value: `${avgScore}%`, subtitle: 'Average resume-job fit score', icon: '🎯' },
+        { title: 'Keyword Match', value: avgScore === null ? '—' : `${avgScore}%`, subtitle: 'Average keyword coverage across your kits', icon: '🎯' },
         { title: 'Interviews', value: interviews, subtitle: 'Pipeline interview stage count', icon: '📞' },
         { title: 'Offers', value: offers, subtitle: 'Offer stage opportunities', icon: '✅' },
       ];
@@ -7497,7 +7463,7 @@
           list.innerHTML = '<div class="history-meta">No tracker data yet.</div>';
           return;
         }
-        list.innerHTML = rows.map(([k, v]) => `<div class="analytics-item"><span>${k}</span><span>${v}</span></div>`).join('');
+        list.innerHTML = rows.map(([k, v]) => `<div class="analytics-item"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join('');
       } catch (err) {
         document.getElementById('analyticsStatusList').innerHTML = '<div class="history-meta">Analytics unavailable.</div>';
       }
@@ -7541,7 +7507,7 @@
     function handleFile(input) {
       resumeFile = input.files[0];
       if (!resumeFile) return;
-      document.getElementById('uploadLabel').innerHTML = `<strong>${resumeFile.name} — Loaded ✓</strong>`;
+      document.getElementById('uploadLabel').innerHTML = `<strong>${esc(resumeFile.name)} — Loaded ✓</strong>`;
       const dz = document.getElementById('dropZone');
       dz.style.borderColor = 'rgba(200,255,0,0.5)';
     }
@@ -7565,7 +7531,7 @@
 
     // Copy button
     function copyTab(id) {
-      const text = document.getElementById('ob-' + id + '-text').textContent;
+      const text = mdToPlain(tabRaw(id));
       navigator.clipboard.writeText(text).then(() => showToast('Copied to clipboard'));
     }
 
@@ -7573,9 +7539,48 @@
       return text.trim().split(/\s+/).filter(Boolean).length;
     }
 
+    // ── Markdown rendering (safe: everything is escaped first) ──
+    function mdInline(s) {
+      let t = esc(s);
+      t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      t = t.replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?![\w*])/g, '$1<em>$2</em>');
+      t = t.replace(/`([^`]+)`/g, '$1');
+      t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (m, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+      return t;
+    }
+    function mdToHtml(md) {
+      const out = [];
+      String(md || '').split('\n').forEach(raw => {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim()) return;
+        let m;
+        if (/^\s*(---+|___+|\*\*\*+|──+|═+)\s*$/.test(line)) return;
+        if ((m = line.match(/^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/))) { out.push(`<div class="md-h${Math.min(m[1].length, 3)}">${mdInline(m[2])}</div>`); return; }
+        if ((m = line.match(/^\s*\*\*([^*]{2,80})\*\*:?\s*$/))) { out.push(`<div class="md-h3">${mdInline(m[1])}</div>`); return; }
+        if ((m = line.match(/^\s*[-*•–·]\s+(.*)$/))) { out.push(`<div class="md-li">${mdInline(m[1])}</div>`); return; }
+        if ((m = line.match(/^\s*(\d{1,3})[.)]\s+(.*)$/))) { out.push(`<div class="md-num">${esc(m[1])}. ${mdInline(m[2])}</div>`); return; }
+        out.push(`<div class="md-p">${mdInline(line.trim())}</div>`);
+      });
+      return out.join('');
+    }
+    function mdToPlain(md) {
+      return String(md || '').split('\n').map(raw => {
+        let l = raw.replace(/^\s{0,3}#{1,6}\s+/, '').replace(/^\s*(---+|___+|──+|═+)\s*$/, '');
+        l = l.replace(/\*\*(.+?)\*\*/g, '$1').replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?![\w*])/g, '$1$2').replace(/`([^`]+)`/g, '$1');
+        l = l.replace(/\[([^\]]+)\]\((mailto:[^)]+)\)/g, '$1').replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
+        return l.replace(/^(\s*)[*•–·]\s+/, '$1- ');
+      }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+    function tabRaw(id) {
+      const el = document.getElementById('ob-' + id + '-text');
+      return (el && el.dataset.raw) || '';
+    }
+
     function setTabText(id, text) {
-      document.getElementById('ob-' + id + '-text').textContent = text;
-      document.getElementById('wc-' + id).textContent = wordCount(text) + ' words';
+      const el = document.getElementById('ob-' + id + '-text');
+      el.dataset.raw = text || '';
+      el.innerHTML = mdToHtml(text || '');
+      document.getElementById('wc-' + id).textContent = wordCount(mdToPlain(text || '')) + ' words';
     }
 
     function configureVisibleAgents() {
@@ -7627,6 +7632,7 @@
 
       // Reset state
       resetProgress();
+      clearResultsForNewRun();
 
       document.getElementById('runBtn').disabled = true;
       document.getElementById('navStatus').textContent = 'Pipeline Running...';
@@ -7662,7 +7668,7 @@
           if (res.status === 401) {
             showAuth();
           }
-          throw new Error(`Server returned ${res.status}.${detail} Run: python main.py`);
+          throw new Error(detail.trim() || `Server returned ${res.status}. Please try again.`);
         }
 
         if (!res.body) {
@@ -7685,6 +7691,8 @@
             setAgentRunning(msg.agent, msg);
           } else if (msg.type === 'agent_done') {
             setAgentDone(msg.agent, msg);
+          } else if (msg.type === 'partial') {
+            showPartial(msg);
           } else if (msg.type === 'complete') {
             buildResults(msg);
           } else if (msg.type === 'error') {
@@ -7716,6 +7724,58 @@
       }
     }
 
+    // Shows each result the moment the server finishes it (before the whole kit is done).
+    function showPartial(msg) {
+      const map = { rewritten_resume: 'resume', cover_letter: 'cover', interview_prep: 'interview', jd_analysis: 'jd', resume_analysis: 'jd' };
+      const tab = map[msg.stage];
+      if (!tab) return;
+      document.getElementById('resultsSection').classList.add('active');
+      document.getElementById('results-label').style.display = 'flex';
+      if (msg.stage === 'jd_analysis') {
+        partialJd = msg.text || '';
+        renderHeatmap(msg.heatmap || []);
+        renderCompanyIntel(msg.company_intel || {});
+        showScoreStats(msg.match_score, msg.kw_count, msg.kw_total, 0);
+      } else if (msg.stage === 'resume_analysis') {
+        partialAnalysis = msg.text || '';
+      } else {
+        setTabText(tab, msg.text || '');
+      }
+      if (msg.stage === 'jd_analysis' || msg.stage === 'resume_analysis') {
+        setTabText('jd', partialJd + (partialAnalysis ? '\n\n## Resume Fit Analysis\n\n' + partialAnalysis.replace(/^##\s/gm, '### ') : ''));
+      }
+      const tabEl = [...document.querySelectorAll('.out-tab')].find(t => (t.getAttribute('onclick') || '').includes(`'${tab}'`));
+      if (tabEl) tabEl.style.display = 'flex';
+      if (!partialShown && tabEl) { partialShown = true; switchOut(tab, tabEl); }
+    }
+    let partialJd = '';
+    let partialAnalysis = '';
+    let partialShown = false;
+
+    // A new run starts from a clean results panel (no leftovers from the previous kit).
+    function clearResultsForNewRun() {
+      partialJd = ''; partialAnalysis = ''; partialShown = false;
+      ['resume', 'cover', 'interview', 'jd'].forEach(id => setTabText(id, ''));
+      document.querySelectorAll('.out-tab').forEach(t => { t.style.display = 'none'; });
+      document.getElementById('resultsSection').classList.remove('active');
+      document.getElementById('results-label').style.display = 'none';
+      renderHeatmap([]);
+      renderCompanyIntel({});
+      renderResumeDiff('');
+    }
+
+    function showScoreStats(matchScore, kwFound, kwTotal, elapsed) {
+      const hasScore = typeof matchScore === 'number';
+      document.getElementById('sMatch').textContent = hasScore ? matchScore + '/10' : '—';
+      document.getElementById('sMatchBar').style.width = hasScore ? (matchScore * 10) + '%' : '0%';
+      document.getElementById('sKw').textContent = kwTotal ? `${kwFound}/${kwTotal}` : (kwFound || '—');
+      document.getElementById('sKwBar').style.width = kwTotal ? Math.round((kwFound / kwTotal) * 100) + '%' : '0%';
+      if (elapsed) {
+        document.getElementById('sTime').textContent = elapsed + 's';
+        document.getElementById('sTimeBar').style.width = Math.min((elapsed / 60) * 100, 100) + '%';
+      }
+    }
+
     function buildResults(data) {
       latestRunId = data.run_id || latestRunId;
       latestSavedFiles = data.saved_files || latestSavedFiles || {};
@@ -7725,22 +7785,21 @@
       document.getElementById('resultsSection').classList.add('active');
       document.getElementById('resultsSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-      setTimeout(() => {
-        document.getElementById('sMatch').textContent = data.match_score + '/10';
-        document.getElementById('sMatchBar').style.width = (data.match_score * 10) + '%';
-        document.getElementById('sKw').textContent = data.kw_count;
-        document.getElementById('sKwBar').style.width = Math.min((data.kw_count / 20) * 100, 100) + '%';
-        document.getElementById('sTime').textContent = data.elapsed + 's';
-        document.getElementById('sTimeBar').style.width = Math.min((data.elapsed / 60) * 100, 100) + '%';
-      }, 300);
+      setTimeout(() => showScoreStats(data.match_score, data.kw_count, data.kw_total, data.elapsed), 300);
+      partialJd = data.jd_analysis || '';
+      partialAnalysis = data.resume_analysis || '';
 
       setTabText('resume', data.rewritten_resume || '');
       setTabText('cover', data.cover_letter || '');
       setTabText('interview', data.interview_prep || '');
-      setTabText('jd', (data.jd_analysis || '') + '\n\n──────────────────────\nRESUME ANALYSIS\n──────────────────────\n' + (data.resume_analysis || ''));
+      setTabText('jd', (data.jd_analysis || '') + (data.resume_analysis ? '\n\n## Resume Fit Analysis\n\n' + data.resume_analysis.replace(/^##\s/gm, '### ') : ''));
       renderHeatmap(data.heatmap || []);
       renderCompanyIntel(latestCompanyIntel);
       renderResumeDiff(data.rewritten_resume || '');
+      // Skill Roadmap: the gaps are the job keywords missing from the resume (real data, computed server-side).
+      const missingKeywords = (data.heatmap || []).filter(h => !h.found).map(h => h.keyword);
+      if (missingKeywords.length) buildRoadmapFromGaps(missingKeywords);
+      (data.warnings || []).forEach(w => showToast(w));
 
       const tabs = {
         resume: Boolean(data.rewritten_resume),
@@ -7761,7 +7820,7 @@
       }
 
       const savedCount = data.saved_files ? Object.keys(data.saved_files).length : 0;
-      showToast(savedCount ? `Kit Generated — ${savedCount} Files Saved` : 'Kit Generated');
+      showToast(savedCount ? `Kit saved — ${savedCount} downloads ready` : 'Kit Generated');
       loadHistory();
       loadAnalytics();
     }
@@ -7805,10 +7864,10 @@
       }
       panel.classList.add('show');
       originalEl.textContent = original || 'No original resume text provided in textbox.';
-      rewrittenEl.textContent = rewritten;
+      rewrittenEl.textContent = mdToPlain(rewritten);
 
       const o = new Set((original.toLowerCase().match(/[a-z0-9+#.-]+/g) || []));
-      const n = new Set((rewritten.toLowerCase().match(/[a-z0-9+#.-]+/g) || []));
+      const n = new Set((mdToPlain(rewritten).toLowerCase().match(/[a-z0-9+#.-]+/g) || []));
       let shared = 0;
       let added = 0;
       n.forEach(w => o.has(w) ? shared++ : added++);
@@ -7824,7 +7883,7 @@
         return;
       }
       panel.classList.add('show');
-      grid.innerHTML = items.map(item => `<span class="kw-chip ${item.found ? 'found' : 'missing'}">${item.keyword}</span>`).join('');
+      grid.innerHTML = items.map(item => `<span class="kw-chip ${item.found ? 'found' : 'missing'}">${esc(item.keyword)}</span>`).join('');
     }
 
     function showError(msg) {
@@ -7843,7 +7902,7 @@
 
     function downloadAll() {
       ['resume', 'cover', 'interview', 'jd'].forEach(id => {
-        const text = document.getElementById('ob-' + id + '-text').textContent;
+        const text = tabRaw(id);
         if (text) dlOne(id, true);
       });
       showToast('Available Files Downloaded');
@@ -7851,7 +7910,7 @@
 
     function dlOne(id, silent = false) {
       const names = { resume: 'rewritten_resume.txt', cover: 'cover_letter.txt', interview: 'interview_prep.txt', jd: 'ats_report.txt' };
-      const text = document.getElementById('ob-' + id + '-text').textContent;
+      const text = mdToPlain(tabRaw(id));
       if (!text) { showToast('No output yet — run the pipeline first'); return; }
       const blob = new Blob([text], { type: 'text/plain' });
       const a = document.createElement('a');
@@ -7978,7 +8037,7 @@
       if (!roles.length) { showToast('Enter at least one role'); return; }
       const status = document.getElementById('scrapeStatus');
       status.style.display = 'block';
-      status.textContent = '⏳ Scraping Naukri + Internshala + LinkedIn...';
+      status.textContent = '⏳ Searching Internshala, Adzuna, RemoteOK, Instahyre and Shine...';
       try {
         const res = await apiJson('/automation/scrape', {
           method: 'POST',
@@ -8020,33 +8079,45 @@
         grid.innerHTML = `<div class="feed-empty" style="grid-column:1/-1;"><div class="feed-empty-icon">🔍</div><div>No jobs found. Try different roles or locations.</div></div>`;
         return;
       }
-      grid.innerHTML = jobs.map((job, i) => {
-        const score = job.score || Math.floor(Math.random() * 40 + 50);
-        const verdict = score >= 70 ? 'go' : score >= 45 ? 'maybe' : 'skip';
-        const verdictLabel = score >= 70 ? 'GO' : score >= 45 ? 'MAYBE' : 'SKIP';
-        return `
+      currentFeedJobs = jobs;
+      grid.innerHTML = jobs.map((job, i) => jobCardHtml(job, i)).join('');
+    }
+
+    // One place that builds a job card. Every field is escaped, links are
+    // http(s) only, and buttons refer to the job by INDEX (no scraped text
+    // is ever placed inside an inline onclick). A Match % is only shown when
+    // the backend really scored the job - never invented.
+    let currentFeedJobs = [];
+    function jobCardHtml(job, i) {
+      const scored = typeof job.score === 'number' && isFinite(job.score);
+      const score = scored ? Math.max(0, Math.min(100, Math.round(job.score))) : null;
+      const verdict = !scored ? '' : score >= 70 ? 'go' : score >= 45 ? 'maybe' : 'skip';
+      const verdictLabel = !scored ? 'NOT SCORED' : score >= 70 ? 'GO' : score >= 45 ? 'MAYBE' : 'SKIP';
+      const link = safeUrl(job.source_url);
+      return `
     <div class="job-card" style="animation:fadeSlideUp 0.4s ${i * 0.05}s ease both;">
       <div class="job-card-source">
-        <span>${job.source || 'Web'}</span>
+        <span>${esc(job.source || 'Web')}</span>
         <span class="job-verdict ${verdict}">${verdictLabel}</span>
       </div>
-      <div class="job-card-title">${job.title || 'Untitled Role'}</div>
-      <div class="job-card-company">🏢 ${job.company || 'Company'}</div>
+      <div class="job-card-title">${esc(job.title || 'Untitled Role')}</div>
+      <div class="job-card-company">🏢 ${esc(job.company || 'Company')}</div>
       <div class="job-card-meta">
-        <span class="job-card-tag">📍 ${job.location || 'Remote'}</span>
-        ${job.stipend ? `<span class="job-card-tag">💰 ${job.stipend}</span>` : ''}
-        ${job.experience ? `<span class="job-card-tag">⏱ ${job.experience}</span>` : ''}
+        <span class="job-card-tag">📍 ${esc(job.location || 'Remote')}</span>
+        ${job.stipend ? `<span class="job-card-tag">💰 ${esc(job.stipend)}</span>` : ''}
+        ${job.experience ? `<span class="job-card-tag">⏱ ${esc(job.experience)}</span>` : ''}
       </div>
-      <div class="job-score-bar"><div class="job-score-fill" style="width:${score}%"></div></div>
-      <div class="job-match-label" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:10px;">Match: ${score}%</div>
+      ${scored ? `<div class="job-score-bar"><div class="job-score-fill" style="width:${score}%"></div></div>
+      <div class="job-match-label" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:10px;">Keyword match: ${score}%</div>` : ''}
       <div class="job-card-actions">
-        <a class="job-action-btn" href="${job.source_url || '#'}" target="_blank">View</a>
-        <button class="job-action-btn primary" onclick="useJobForRun('${(job.title || '').replace(/'/g, '`')}','${(job.company || '').replace(/'/g, '`')}','${job.source_url || ''}')">Use →</button>
-        <button class="job-action-btn" style="background:var(--paper);color:var(--coral-dark);border-color:var(--ink);" onclick="openColdEmailModal('${(job.title || '').replace(/'/g, '`')}','${(job.company || '').replace(/'/g, '`')}','${job.source_url || ''}')">📧 Cold Email</button>
+        ${link ? `<a class="job-action-btn" href="${esc(link)}" target="_blank" rel="noopener noreferrer">View</a>` : ''}
+        <button class="job-action-btn primary" onclick="useJobFromFeed(${i})">Use →</button>
+        <button class="job-action-btn" style="background:var(--paper);color:var(--coral-dark);border-color:var(--ink);" onclick="coldEmailFromFeed(${i})">📧 Draft Cold Email</button>
       </div>
     </div>`;
-      }).join('');
     }
+    function useJobFromFeed(i) { const j = currentFeedJobs[i] || {}; useJobForRun(j.title || '', j.company || '', j.source_url || ''); }
+    function coldEmailFromFeed(i) { const j = currentFeedJobs[i] || {}; openColdEmailModal(j.title || '', j.company || '', j.source_url || ''); }
 
     function useJobForRun(title, company, url) {
       document.getElementById('companyInput').value = company;
@@ -8061,6 +8132,9 @@
     let ivRoundType = 'technical';
     let ivSessionId = null;
     let ivActive = false;
+    let ivBusy = false;
+    let ivQuestionNumber = 1;
+    let ivTotal = 5;
 
     function selectRound(type, el) {
       ivRoundType = type;
@@ -8068,69 +8142,150 @@
       el.classList.add('active');
     }
 
-    async function startInterview() {
-      const jd = document.getElementById('jdInput')?.value || '';
-      const resume = document.getElementById('resumeTextInput')?.value || '';
-      const role = document.getElementById('companyInput')?.value || 'Software Developer';
-      const company = document.getElementById('companyInput')?.value || 'Company';
-
-      document.getElementById('ivChatTitle').textContent = `${ivRoundType.toUpperCase()} ROUND`;
-      document.getElementById('ivAvgScore').textContent = '—';
+    function ivSetTitle() {
+      const name = ivRoundType.toUpperCase() + ' ROUND';
+      document.getElementById('ivChatTitle').textContent = ivActive ? `${name} · Q${ivQuestionNumber}/${ivTotal}` : name;
+    }
+    function ivSetAvg(v) {
+      document.getElementById('ivAvgScore').textContent = (v === null || v === undefined) ? '—' : `${v}/10`;
+    }
+    function addIvQuestion(q, n, total) { addIvMsg('ai', `Question ${n} of ${total}\n${q}`); }
+    function addIvFeedback(res) {
       const body = document.getElementById('ivChatBody');
-      body.innerHTML = `<div class="iv-msg system">Starting ${ivRoundType} interview...</div>`;
-      document.getElementById('ivChatInput').style.display = 'flex';
+      const div = document.createElement('div');
+      div.className = 'iv-msg system';
+      div.style.cssText = 'max-width:100%;text-align:left;';
+      div.innerHTML = `<strong>Feedback · ${esc(res.score)}/10</strong><br>${esc(res.feedback)}` +
+        (res.model_answer_hint ? `<br><br><strong>A strong answer would:</strong> ${esc(res.model_answer_hint)}` : '');
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    }
+
+    async function startInterview() {
+      if (ivBusy) return;
+      if (ivActive && !confirm('Start a new interview? Your current one will be ended.')) return;
+      const jd = (document.getElementById('jdInput')?.value || '').trim();
+      if (jd.length < 30) { showToast('Paste the job description in the Run Kit form first, so the questions match the role.'); return; }
+      let resume = (document.getElementById('resumeTextInput')?.value || '').trim();
+      if (!resume && typeof resumeFile !== 'undefined' && resumeFile && /\.(txt|md)$/i.test(resumeFile.name)) {
+        try { resume = (await resumeFile.text()).trim(); } catch (e) { }
+      }
+      const company = (document.getElementById('companyInput')?.value || '').trim() || 'the company';
+
+      ivBusy = true;
+      ivActive = false;
+      ivSessionId = null;
+      ivSetTitle();
+      ivSetAvg(null);
+      const body = document.getElementById('ivChatBody');
+      body.innerHTML = `<div class="iv-msg system">Preparing your ${esc(ivRoundType)} interview...</div>`;
+      document.getElementById('ivChatInput').style.display = 'none';
 
       try {
         const res = await apiJson('/automation/interview/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ round_type: ivRoundType, jd, resume, role, company }),
+          body: JSON.stringify({ round_type: ivRoundType, jd, resume, company }),
         });
         ivSessionId = res.session_id;
         ivActive = true;
-        addIvMsg('ai', res.opener);
+        ivTotal = res.total_questions;
+        ivQuestionNumber = res.question_number;
+        body.innerHTML = '';
+        addIvMsg('system', res.intro || '');
+        addIvQuestion(res.pending_question, ivQuestionNumber, ivTotal);
+        ivSetTitle();
+        document.getElementById('ivChatInput').style.display = 'flex';
         showToast('Interview started! Type your answer below.');
         checkAchievement('first_interview');
       } catch (e) {
-        body.innerHTML = `<div class="iv-msg system">❌ Failed to start. Make sure GROQ_API_KEY is set.</div>`;
+        if (e.upgradeRequired) {
+          body.innerHTML = `<div class="iv-msg system">The interview simulator is part of ZeroToHire Pro.<br><button class="upgrade-inline-cta" onclick="openUpgradeModal()">✨ Upgrade to Pro</button></div>`;
+        } else {
+          body.innerHTML = `<div class="iv-msg system">❌ ${esc(e.message || 'Could not start the interview. Please try again.')}</div>`;
+        }
+      } finally {
+        ivBusy = false;
       }
     }
 
     async function sendIvAnswer() {
       if (!ivSessionId || !ivActive) { showToast('Start an interview first'); return; }
+      if (ivBusy) return;
       const input = document.getElementById('ivAnswerInput');
       const answer = input.value.trim();
       if (!answer) return;
+      ivBusy = true;
       input.value = '';
-      addIvMsg('user', answer);
+      const mine = addIvMsg('user', answer);
+      const thinking = addIvMsg('system', 'The interviewer is reviewing your answer...');
 
       try {
         const res = await apiJson('/automation/interview/answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: ivSessionId, answer }),
+          body: JSON.stringify({ session_id: ivSessionId, answer, question_number: ivQuestionNumber }),
         });
-        if (res.error) { addIvMsg('system', `Error: ${res.error}`); return; }
-        addIvMsg('ai', res.ai_reply, res.score);
-        document.getElementById('ivAvgScore').textContent = `${res.total_score}/10`;
+        thinking.remove();
+        if (res.reaction) addIvMsg('ai', res.reaction, res.score);
+        addIvFeedback(res);
+        ivSetAvg(res.average_score);
         if (res.status === 'completed') {
           ivActive = false;
-          addIvMsg('system', `✅ Interview complete! Avg score: ${res.total_score}/10`);
+          ivSetTitle();
           document.getElementById('ivChatInput').style.display = 'none';
+          renderIvReport({
+            round_name: document.getElementById('ivChatTitle').textContent, answered: res.answered,
+            total_questions: res.total_questions, average_score: res.average_score,
+            grade: res.report && res.report.grade, report: res.report,
+          });
           loadIvSessions();
           checkAchievement('interview_complete');
+        } else {
+          ivQuestionNumber = res.question_number;
+          addIvQuestion(res.next_question, ivQuestionNumber, ivTotal);
+          ivSetTitle();
         }
       } catch (e) {
-        addIvMsg('system', 'Connection error. Try again.');
+        thinking.remove();
+        if (e.status === 409) {
+          // out of sync (e.g. double click): drop the echoed answer and reload where we really are
+          mine.remove();
+          showToast('That answer was for a different question. Reloading...');
+          await restoreInterview();
+        } else {
+          // nothing was recorded: put the answer back so it is not lost
+          mine.remove();
+          input.value = answer;
+          addIvMsg('system', `❌ ${e.message || 'Could not send your answer.'} Your answer is still in the box: press send to try again.`);
+        }
+      } finally {
+        ivBusy = false;
       }
+    }
+
+    async function restoreInterview() {
+      try {
+        const v = await apiJson(`/automation/interview/summary/${encodeURIComponent(ivSessionId)}`);
+        if (v.status === 'active' && v.pending_question) {
+          ivQuestionNumber = v.question_number;
+          ivSetTitle();
+          ivSetAvg(v.average_score);
+          addIvQuestion(v.pending_question, ivQuestionNumber, ivTotal);
+        } else {
+          ivActive = false;
+          document.getElementById('ivChatInput').style.display = 'none';
+          renderIvReport(v);
+        }
+      } catch (e) { showToast('Could not reload the interview'); }
     }
 
     function addIvMsg(role, text, score) {
       const body = document.getElementById('ivChatBody');
-      if (!body) return;
+      if (!body) return null;
       const div = document.createElement('div');
       div.className = `iv-msg ${role}`;
-      div.innerHTML = text.replace(/\n/g, '<br>') + (score !== undefined ? `<div class="iv-score-chip">${score}/10</div>` : '');
+      div.innerHTML = esc(text).replace(/\n/g, '<br>') + (score !== undefined && score !== null ? `<div class="iv-score-chip">${esc(score)}/10</div>` : '');
       body.appendChild(div);
       body.scrollTop = body.scrollHeight;
       // Speak AI messages if voice toggle is on
@@ -8140,27 +8295,56 @@
           setTimeout(() => speakText(text), 300);
         }
       }
+      return div;
+    }
+
+    function renderIvReport(v) {
+      const r = v.report || {};
+      const avg = (v.average_score !== undefined && v.average_score !== null) ? v.average_score : r.average_score;
+      const list = (arr) => (arr && arr.length)
+        ? '<ul style="margin:4px 0 0 18px;padding:0;">' + arr.map(x => `<li>${esc(x)}</li>`).join('') + '</ul>'
+        : '<div>—</div>';
+      const body = document.getElementById('ivChatBody');
+      const box = document.createElement('div');
+      box.className = 'iv-msg system';
+      box.style.cssText = 'max-width:100%;text-align:left;padding:20px;';
+      if (!v.answered) {
+        box.innerHTML = `<strong style="color:var(--coral-dark);font-family:'Kalam',cursive;font-size:16px;">📊 INTERVIEW ENDED</strong><br><br>No answers were recorded, so there is no score.`;
+      } else {
+        box.innerHTML = `
+        <strong style="color:var(--coral-dark);font-family:'Kalam',cursive;font-size:16px;">📊 INTERVIEW REPORT</strong><br><br>
+        ${esc(v.round_name || '')}<br>
+        Answered: ${esc(v.answered)}/${esc(v.total_questions)}<br>
+        Average score: <strong style="color:var(--coral-dark)">${avg === null || avg === undefined ? '—' : esc(avg) + '/10'}</strong>${v.grade ? ` · <strong>${esc(v.grade)}</strong>` : ''}<br><br>
+        ${r.summary ? esc(r.summary) + '<br><br>' : ''}
+        <strong>Strengths</strong>${list(r.strengths)}<br>
+        <strong>Work on</strong>${list(r.improvements)}<br>
+        <strong>Next steps</strong>${list(r.next_steps)}`;
+      }
+      body.appendChild(box);
+      body.scrollTop = body.scrollHeight;
     }
 
     async function endInterview() {
-      if (!ivSessionId) { showToast('No active interview'); return; }
+      if (!ivSessionId) { showToast('No interview to end. Start one first.'); return; }
+      if (ivBusy) return;
+      ivBusy = true;
       try {
-        const res = await apiJson(`/automation/interview/summary/${ivSessionId}`);
-        const body = document.getElementById('ivChatBody');
-        body.innerHTML += `
-      <div class="iv-msg system" style="max-width:100%;text-align:left;padding:20px;">
-        <strong style="color:var(--coral-dark);font-family:'Kalam',cursive;font-size:16px;">📊 INTERVIEW SUMMARY</strong><br><br>
-        Round: ${res.round_name}<br>
-        Questions: ${res.total_questions}<br>
-        Average Score: <strong style="color:var(--coral-dark)">${res.average_score}/10</strong><br>
-        Grade: <strong>${res.grade}</strong>
-      </div>`;
-        body.scrollTop = body.scrollHeight;
-        document.getElementById('ivChatInput').style.display = 'none';
+        const res = await apiJson('/automation/interview/finish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: ivSessionId }),
+        });
+        const wasActive = ivActive;
         ivActive = false;
+        ivSetTitle();
+        document.getElementById('ivChatInput').style.display = 'none';
+        if (wasActive) renderIvReport(res);
+        else showToast('This interview is already finished. See the report above.');
         ivSessionId = null;
         loadIvSessions();
-      } catch (e) { showToast('Could not load summary'); }
+      } catch (e) { showToast(e.message || 'Could not load the report'); }
+      finally { ivBusy = false; }
     }
 
     async function loadIvSessions() {
@@ -8172,10 +8356,10 @@
         list.innerHTML = sessions.slice(0, 5).map(s => `
       <div class="iv-session-item">
         <div>
-          <div class="iv-session-name">${s.round_name} — ${s.role}</div>
-          <div style="font-family:'Nunito',sans-serif;font-weight:600;font-size:10px;color:var(--ink-soft);">${s.status} · ${(s.created_at || '').slice(0, 10)}</div>
+          <div class="iv-session-name">${esc(s.round_name)} — ${esc(s.role)}</div>
+          <div style="font-family:'Nunito',sans-serif;font-weight:600;font-size:10px;color:var(--ink-soft);">${esc(s.status)} · ${esc(s.answered || 0)}/${esc(s.total_questions || 5)} answered · ${esc((s.created_at || '').slice(0, 10))}</div>
         </div>
-        <div class="iv-session-score">${s.total_score || '—'}</div>
+        <div class="iv-session-score">${s.answered ? esc(s.total_score) : '—'}</div>
       </div>`).join('');
       } catch (e) { }
     }
@@ -8210,10 +8394,10 @@
         const done = gapsDone[gap] || false;
         return `
     <div class="gap-item ${done ? 'done' : ''}" id="gap-${i}">
-      <div class="gap-check" onclick="toggleGap('${gap}',${i})">${done ? '✓' : ''}</div>
+      <div class="gap-check" onclick="toggleGap(${jsArg(gap)},${i})">${done ? '✓' : ''}</div>
       <div class="gap-info">
-        <div class="gap-skill">${gap}</div>
-        <div class="gap-resource">📚 ${resource}</div>
+        <div class="gap-skill">${esc(gap)}</div>
+        <div class="gap-resource">📚 ${esc(resource)}</div>
       </div>
       <div class="gap-priority ${priority.toLowerCase()}">${priority}</div>
     </div>`;
@@ -8251,7 +8435,7 @@
       sprint.innerHTML = plans.map(p => `
     <div class="sprint-item">
       <div class="sprint-day">${p.day}</div>
-      <div class="sprint-task">${p.task}</div>
+      <div class="sprint-task">${esc(p.task)}</div>
     </div>`).join('');
     }
 
@@ -8267,7 +8451,7 @@
       { id: 'first_scrape', icon: '🔍', name: 'Scout', desc: 'Scraped jobs for the first time', key: 'scraped', threshold: 1 },
       { id: 'gap_closed', icon: '🧬', name: 'DNA Upgrade', desc: 'Marked a skill gap as learned', key: 'gaps_closed', threshold: 1 },
       { id: 'high_score', icon: '🎯', name: 'Sharp Shooter', desc: 'Got a match score of 8+ on a run', key: 'high_score', threshold: 1 },
-      { id: 'cold_email', icon: '📧', name: 'Cold Caller', desc: 'Sent your first cold email to HR', key: 'cold_emails', threshold: 1 },
+      { id: 'cold_email', icon: '📧', name: 'Cold Caller', desc: 'Drafted your first cold email', key: 'cold_emails', threshold: 1 },
       { id: 'streak_3', icon: '⚡', name: 'On A Roll', desc: 'Applied 3 days in a row', key: 'streak', threshold: 3 },
       { id: 'portfolio', icon: '🌟', name: 'Portfolio Star', desc: 'Generated 10+ application kits', key: 'runs', threshold: 10 },
     ];
@@ -8434,6 +8618,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const aiToggle = document.getElementById('ivAiVoiceToggle');
   const voiceToggle = document.getElementById('ivVoiceAnswerToggle');
   if (aiToggle) {
+    ivAiVoiceOn = aiToggle.checked;   // the box is checked by default, so voice starts ON
     aiToggle.addEventListener('change', function() {
       ivAiVoiceOn = this.checked;
       showToast(ivAiVoiceOn ? '🔊 AI voice enabled' : '🔇 AI voice muted');
@@ -8616,27 +8801,8 @@ function applyFeedFilters() {
     grid.innerHTML = '<div class="feed-empty" style="grid-column:1/-1;"><div class="feed-empty-icon">🔍</div><div>No jobs match these filters. Try changing filters.</div></div>';
     return;
   }
-  grid.innerHTML = jobs.map(function(job, i) {
-    var score = job.score || Math.floor(Math.random() * 40 + 50);
-    var verdict = score >= 70 ? 'go' : score >= 45 ? 'maybe' : 'skip';
-    var verdictLabel = score >= 70 ? 'GO' : score >= 45 ? 'MAYBE' : 'SKIP';
-    return '<div class="job-card" style="animation:fadeSlideUp 0.4s ' + (i * 0.05) + 's ease both;">' +
-      '<div class="job-card-source"><span>' + (job.source || 'Web') + '</span><span class="job-verdict ' + verdict + '">' + verdictLabel + '</span></div>' +
-      '<div class="job-card-title">' + (job.title || 'Untitled Role') + '</div>' +
-      '<div class="job-card-company">🏢 ' + (job.company || 'Company') + '</div>' +
-      '<div class="job-card-meta">' +
-        '<span class="job-card-tag">📍 ' + (job.location || 'Remote') + '</span>' +
-        (job.stipend ? '<span class="job-card-tag">💰 ' + job.stipend + '</span>' : '') +
-        (job.experience ? '<span class="job-card-tag">⏱ ' + job.experience + '</span>' : '') +
-      '</div>' +
-      '<div class="job-score-bar"><div class="job-score-fill" style="width:' + score + '%"></div></div>' +
-      '<div class="job-match-label" style="font-family:\'DM Mono\',monospace;font-size:10px;color:var(--text-muted);margin-bottom:10px;">Match: ' + score + '%</div>' +
-      '<div class="job-card-actions">' +
-        '<a class="job-action-btn" href="' + (job.source_url || '#') + '" target="_blank">View</a>' +
-        '<button class="job-action-btn primary" onclick="useJobForRun(\'' + (job.title || '').replace(/'/g, '`') + '\',\'' + (job.company || '').replace(/'/g, '`') + '\',\'' + (job.source_url || '') + '\')">Use →</button>' +
-        '<button class="job-action-btn" style="background:var(--paper);color:var(--coral-dark);border-color:var(--ink);" onclick="openColdEmailModal(\'' + (job.title || '').replace(/'/g, '`') + '\',\'' + (job.company || '').replace(/'/g, '`') + '\',\'' + (job.source_url || '') + '\')">📧 Cold Email</button>' +
-      '</div></div>';
-  }).join('');
+  currentFeedJobs = jobs;
+  grid.innerHTML = jobs.map(function(job, i) { return jobCardHtml(job, i); }).join('');
 }
 
 // Override renderJobFeed to store jobs and apply filters
@@ -8653,7 +8819,7 @@ runScraper = async function() {
   if (!roles.length) { showToast('Enter at least one role'); return; }
   var status = document.getElementById('scrapeStatus');
   status.style.display = 'block';
-  status.textContent = '⏳ Scraping Naukri + Internshala + LinkedIn...';
+  status.textContent = '⏳ Searching Internshala, Adzuna, RemoteOK, Instahyre and Shine...';
   try {
     var res = await apiJson('/automation/scrape', {
       method: 'POST',
@@ -8685,29 +8851,6 @@ if (window.speechSynthesis) {
   };
 }
 
-    function generateDemoJobs(role, location) {
-      const sources = ['Internshala','Naukri','LinkedIn','Adzuna','RemoteOK','Instahyre','Shine'];
-      const companies = ['Razorpay','Meesho','Zepto','Groww','CRED','Slice','Ola','Swiggy','PhonePe','Juspay','BrowserStack','Postman','Freshworks','Zoho','Clevertap'];
-      const stipends = ['₹15,000/mo','₹25,000/mo','₹8,000/mo','₹35,000/mo',null];
-      const jobs = [];
-      for (let i = 0; i < 14; i++) {
-        const src = sources[i % sources.length];
-        const isIntern = src === 'Internshala' || (i % 3 === 0 && src !== 'RemoteOK');
-        const isRemote = src === 'RemoteOK';
-        jobs.push({
-          title: role + ' ' + (isIntern ? 'Intern' : 'Engineer'),
-          company: companies[Math.floor(Math.random() * companies.length)],
-          location: isRemote ? 'Remote' : (i % 4 === 2 ? 'Remote' : location),
-          source: src, source_url: '#',
-          score: Math.floor(Math.random() * 30) + 60,
-          stipend: stipends[i % stipends.length],
-          type: isIntern ? 'internship' : (isRemote ? 'remote' : 'fulltime'),
-          scraped_at: new Date().toISOString(),
-        });
-      }
-      return jobs;
-    }
-
     // ── LINKEDIN POST GENERATOR ────────────────────────────
     async function generateLinkedInPost() {
       const project = document.getElementById('liPostInput').value.trim();
@@ -8737,40 +8880,6 @@ if (window.speechSynthesis) {
       navigator.clipboard.writeText(text).then(() => showToast('✅ Copied to clipboard!'));
     }
 
-    // ── SALARY ESTIMATOR ──────────────────────────────────
-    async function estimateSalary() {
-      const jd = document.getElementById('salJD').value.trim();
-      const location = document.getElementById('salLocation').value.trim() || 'Delhi';
-      const experience = document.getElementById('salExp').value.trim() || '0';
-      const resume = document.getElementById('resumeText')?.value?.trim() || '';
-      if (!jd) { showToast('Paste a job description first'); return; }
-      const btn = document.querySelector('[onclick="estimateSalary()"]');
-      btn.textContent = '⏳ Estimating...'; btn.disabled = true;
-      try {
-        const res = await apiJson('/salary-estimate', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ jd, resume, location, experience }),
-        });
-        if (res.error) { showToast('Error: ' + res.error); return; }
-        const unit = res.currency || 'LPA';
-        document.getElementById('salMin').textContent = res.min_salary + ' ' + unit;
-        document.getElementById('salMed').textContent = res.median_salary + ' ' + unit;
-        document.getElementById('salMax').textContent = res.max_salary + ' ' + unit;
-        const tips = [
-          res.reasoning || '',
-          res.negotiation_tip ? '💡 Tip: ' + res.negotiation_tip : '',
-          res.skill_premium?.length ? '🔥 Skills that pay more: ' + res.skill_premium.join(', ') : '',
-        ].filter(Boolean).join('\n\n');
-        document.getElementById('salReasoning').textContent = tips;
-        document.getElementById('salResult').classList.add('visible');
-      } catch(e) {
-        showToast('Error estimating salary. Try again.');
-      } finally {
-        btn.textContent = '📊 Estimate Salary'; btn.disabled = false;
-      }
-    }
-
     // ── ACTIVITY HUB ──────────────────────────────────────
 
     // Cold Email Modal
@@ -8781,6 +8890,7 @@ if (window.speechSynthesis) {
       document.getElementById('ceHrEmail').value = '';
       document.getElementById('coldEmailStatus').textContent = '';
       document.getElementById('coldEmailStatus').className = 'cold-email-status';
+      document.getElementById('ceDraftBox').style.display = 'none';
       // Pre-fill candidate info from current user
       if (currentUser) {
         document.getElementById('ceCandidateName').value = currentUser.name || '';
@@ -8812,7 +8922,7 @@ if (window.speechSynthesis) {
         return;
       }
 
-      statusEl.textContent = '⏳ Sending...';
+      statusEl.textContent = '⏳ Writing your draft...';
       statusEl.className = 'cold-email-status';
 
       try {
@@ -8821,29 +8931,33 @@ if (window.speechSynthesis) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             company, role,
-            job_url: jobUrl,
             hr_email: hrEmail,
             candidate_name: candidateName,
             candidate_email: candidateEmail,
             cover_snippet: coverSnippet
           })
         });
-
-        if (res.ok) {
-          statusEl.textContent = `✅ Sent to ${res.hr_email}`;
-          statusEl.className = 'cold-email-status ok';
-          // Update achievement tracking
-          const coldEmails = (parseInt(localStorage.getItem('cold_emails') || '0')) + 1;
-          localStorage.setItem('cold_emails', coldEmails);
-          showToast(`📧 Cold email sent to ${res.hr_email}`);
-          setTimeout(closeColdEmailModalDirect, 2000);
-        } else {
-          throw new Error(res.message || 'Send failed');
-        }
+        const d = res.draft || {};
+        document.getElementById('ceDraftSubject').value = d.subject || '';
+        document.getElementById('ceDraftBody').value = d.body || '';
+        document.getElementById('ceDraftBox').style.display = 'block';
+        statusEl.textContent = '✅ Draft ready. Review it, attach your resume, then send it yourself.';
+        statusEl.className = 'cold-email-status ok';
+        localStorage.setItem('cold_emails', (parseInt(localStorage.getItem('cold_emails') || '0')) + 1);
       } catch (err) {
         statusEl.textContent = `❌ ${err.message}`;
         statusEl.className = 'cold-email-status err';
       }
+    }
+    function copyColdEmailDraft() {
+      const text = document.getElementById('ceDraftSubject').value + '\n\n' + document.getElementById('ceDraftBody').value;
+      navigator.clipboard.writeText(text).then(() => showToast('Draft copied'), () => showToast('Could not copy - select the text and copy it'));
+    }
+    function openColdEmailInMailApp() {
+      const to = document.getElementById('ceHrEmail').value.trim();
+      const subject = encodeURIComponent(document.getElementById('ceDraftSubject').value);
+      const body = encodeURIComponent(document.getElementById('ceDraftBody').value);
+      window.location.href = `mailto:${encodeURIComponent(to).replace(/%40/g, '@')}?subject=${subject}&body=${body}`;
     }
 
   </script>

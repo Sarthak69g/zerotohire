@@ -14,3 +14,6 @@ app.db
 
 # Local candidate profile data
 profiles/
+
+# Personal resume
+resume.txt
